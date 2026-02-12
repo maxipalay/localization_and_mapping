@@ -14,6 +14,7 @@ find_package(GTSAM REQUIRED)
 add_library(${PROJECT_NAME} SHARED
   src/feature_detector.cpp
   src/feature_tracker.cpp
+  src/tracks_buffer.cpp
 )
 
 ament_target_dependencies(${PROJECT_NAME}

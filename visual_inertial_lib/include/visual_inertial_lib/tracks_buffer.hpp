@@ -1,58 +1,81 @@
+// TracksBuffer.hpp
 #pragma once
+
 #include <opencv2/core.hpp>
-#include <opencv2/cudaarithm.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudafilters.hpp>
-#include <mutex>
+
+#include <cstdint>
 #include <vector>
 
-class TracksBuffer {
+class TracksBuffer
+{
 public:
-  using TrackId = uint32_t;
+    using TrackId = uint32_t;
 
-  explicit TracksBuffer(size_t reserve_n = 0) { reserve(reserve_n); }
+    explicit TracksBuffer(size_t reserve_n = 0);
 
-  void reserve(size_t n);
+    void reserve(size_t n);
 
-  // Called once per frame
-  void beginFrame();          // clears right-valid flags (and optionally depth-valid)
-  void clear();               // drop everything (rare)
+    // called once per frame, right observations are per-frame and get refreshed; prev-3D stays.
+    void beginFrame();
 
-  size_t size() const { return ids_.size(); }
-  bool empty() const { return ids_.empty(); }
+    // drop everything
+    void clear();
 
-  // Deterministic order access (no copies)
-  const std::vector<TrackId>& ids()   const { return ids_; }
-  const std::vector<cv::Point2f>& pl() const { return pl_; }
-  const std::vector<cv::Point2f>& pr() const { return pr_; }
-  const std::vector<uint8_t>& hasRight() const { return has_r_; }
+    size_t size() const;
+    bool empty() const;
 
-  // refresh tracked left points (same ordering)
-  void setLeftInPlace(const std::vector<cv::Point2f>& pl_new);
+    // deterministic order access - zero copy
+    const std::vector<TrackId> &ids() const;
+    const std::vector<cv::Point2f> &pl() const;
+    const std::vector<cv::Point2f> &pr() const;
+    const std::vector<uint8_t> &hasRight() const;
 
-  // apply gating mask in same order as pl()
-  // keep[i] != 0 -> keep. Stable compaction.
-  void applyKeepMask(const std::vector<uint8_t>& keep);
+    // prev-frame 3D cache aligned to tracks used for PnP with current pl_
+    const std::vector<cv::Point3f> &Xprev() const;
+    const std::vector<uint8_t> &hasXprev() const;
 
-  // right points come later: fill partial or full
-  void setRightAll(const std::vector<cv::Point2f>& pr_new,
-                   const std::vector<uint8_t>* valid = nullptr);
+    // refresh tracked left points (same ordering)
+    void setLeftInPlace(const std::vector<cv::Point2f> &pl_new);
 
-  void setRightForIndices(const std::vector<int>& indices,
-                          const std::vector<cv::Point2f>& pr_values);
+    // apply gating mask in same order as pl(); stable compaction
+    void applyKeepMask(const std::vector<uint8_t> &keep);
 
-  // top up with new tracks (auto IDs)
-  // appends in order of pts in pl_new
-  void addNewLeft(const std::vector<cv::Point2f>& pl_new,
-                  std::vector<TrackId>* out_ids = nullptr);
+    // right points come later: fill partial or full
+    void setRightAll(const std::vector<cv::Point2f> &pr_new,
+                     const std::vector<uint8_t> *valid = nullptr);
 
+    void setRightForIndices(const std::vector<int> &indices,
+                            const std::vector<cv::Point2f> &pr_values);
+
+    // Prev-frame 3D comes from "previous frame" triangulation
+    // computed elsewhere. This buffer just stores it aligned to tracks
+    void setPrev3DAll(const std::vector<cv::Point3f> &X_prev_new,
+                      const std::vector<uint8_t> *valid = nullptr);
+
+    void setPrev3DForIndices(const std::vector<int> &indices,
+                             const std::vector<cv::Point3f> &X_values);
+
+    void invalidatePrev3DAll();
+
+    // top up with new tracks (auto IDs). Appends in order of pts in pl_new.
+    void addNewLeft(const std::vector<cv::Point2f> &pl_new,
+                    std::vector<TrackId> *out_ids = nullptr);
+
+    // helper: gather only valid PnP correspondences
+    void gatherPnP(std::vector<cv::Point3f> &object_pts,
+                   std::vector<cv::Point2f> &image_pts,
+                   std::vector<int> *out_indices = nullptr) const;
 
 private:
-  TrackId next_id_ = 1;
+    TrackId next_id_ = 1;
 
-  std::vector<TrackId> ids_;
-  std::vector<cv::Point2f> pl_;
-  std::vector<cv::Point2f> pr_;
-  std::vector<uint8_t> has_r_;
+    // SoA storage
+    std::vector<TrackId> ids_;
+    std::vector<cv::Point2f> pl_;
+    std::vector<cv::Point2f> pr_;
+    std::vector<uint8_t> has_r_;
 
+    // prev-frame 3D cache aligned with tracks for PnP this frame
+    std::vector<cv::Point3f> X_prev_;
+    std::vector<uint8_t> has_X_prev_;
 };
