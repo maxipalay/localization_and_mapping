@@ -14,12 +14,44 @@ class VisualInertial
 public:
     struct Params
     {
+        uint16_t target_features = 250;
+        float stereo_epi_eps_y = 2.0;
+        float stereo_disp_min = 1.0;
+        float stereo_disp_max = 255;
+
     };
 
-FrameResult processStereo(const cv::Mat &gray8_left,
-                                         const cv::Mat &gray8_right, double stamp);
+    VisualInertial()
+        : VisualInertial(Params{})
+    {
+    }
 
-    private :
+    VisualInertial(const Params &p);
 
+    
+
+    FrameResult processStereo(const cv::Mat &gray8_left,
+                              const cv::Mat &gray8_right, double stamp);
+
+    void setCalibration(const CameraRig &calibration)
+    {
+        calibration_ = calibration;
+    }
+
+private:
     Params params_;
+    bool first_frame_ = true;
+
+    CameraRig calibration_;
+    TracksBuffer tracks_buffer_;
+    FeatureDetector feature_detector_;
+    FeatureTracker tracker_temporal_;
+    FeatureTracker tracker_spatial_;
+
+    cv::cuda::Stream stream_{};
+    cv::cuda::GpuMat d_mask_{}; // mask on device for feature top-up
+    cv::cuda::GpuMat d_gray8_left_{};
+    cv::cuda::GpuMat d_gray8_right_{};
+    cv::cuda::GpuMat d_gray8_left_prev_{};
+    
 };

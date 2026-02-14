@@ -21,8 +21,6 @@ add_library(${PROJECT_NAME} SHARED
 ament_target_dependencies(${PROJECT_NAME}
 )
 
-
-
 set(_gtsam_eigen "${GTSAM_INCLUDE_DIR}/gtsam/3rdparty/Eigen")
 
 target_include_directories(${PROJECT_NAME} PUBLIC
