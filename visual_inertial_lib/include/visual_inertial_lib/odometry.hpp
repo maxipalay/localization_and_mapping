@@ -14,10 +14,11 @@ class VisualInertial
 public:
     struct Params
     {
-        uint16_t target_features = 250;
-        float stereo_epi_eps_y = 2.0;
-        float stereo_disp_min = 1.0;
-        float stereo_disp_max = 255;
+        uint16_t target_features = 500;
+        float stereo_epi_eps_y = 1.5;
+        float stereo_disp_min = 3.0;
+        float stereo_disp_max = 255.0;
+        float fb_thr2 = 3.0 * 3.0;
 
     };
 

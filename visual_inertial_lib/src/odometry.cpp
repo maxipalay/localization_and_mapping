@@ -1,6 +1,29 @@
-// TODO: instead of instantiating new vectors each time, use scratch buffer + clear()
+// TODO:
+// instead of instantiating new vectors each time, use scratch buffer + clear()
+// tracks can agglomerate in certain regions, would be good to implement a strategy for topup that uses some sort of grid
+// do we want to keep tracks age? maybe the older a track is the more I can trust it?
 
 #include "visual_inertial_lib/odometry.hpp"
+
+// Inputs: pl[i], pr[i] in pixels (rectified); intrinsics fx, fy, cx, cy; baseline B (meters)
+bool triangulateRectified(
+    const cv::Point2f& pl, const cv::Point2f& pr,
+    float fx, float fy, float cx, float cy, float B,
+    cv::Point3f& X_out)
+{
+  const float d = pl.x - pr.x;              // disparity
+
+  const float z = fx * B / d;
+
+  if (!std::isfinite(z) || z <= 0.f) return false;
+
+  const float x = (pl.x - cx) * z / fx;
+  const float y = (pl.y - cy) * z / fy;
+  X_out = cv::Point3f(x, y, z);
+
+  return true;
+}
+
 
 VisualInertial::VisualInertial(const Params &p)
     : params_(p),
@@ -35,7 +58,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     // check our calibration is valid, if not return
     if (!calibration_.valid())
     {
-        std::cout << "[VisualInertial] Got frames but calibration is invalid!" << std::endl;
+        // std::cout << "[VisualInertial] Got frames but calibration is invalid!" << std::endl;
         return output;
     }
 
@@ -54,7 +77,8 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         d_gray8_left_prev_ = d_gray8_left_.clone();
         return output;
     }
-
+    tracks_buffer_.beginFrame();
+    
     // get current tracks from buffer
     const auto &pl_prev = tracks_buffer_.pl();
 
@@ -74,15 +98,16 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     // checks whether the points tracked forward and then backward are within a distance from the original points
     // generates the status vector
 
-    const float fb_thr2 = 2.0 * 2.0; // you already have fb_thr_px
-
+    uint16_t temporal_dropped = 0;
     std::vector<unsigned char> status_fb; // the status after applying the gate - this aligns with status_fw & status_bw
     status_fb.resize(pl_prev.size());
     for (size_t i = 0; i < status_fw.size(); ++i)
     {
         float dx = pl_prev[i].x - pts_bw[i].x;
         float dy = pl_prev[i].y - pts_bw[i].y;
-        status_fb[i] = (status_fw[i] != 0 && status_bw[i] != 0 && dx * dx + dy * dy < fb_thr2) ? 1 : 0;
+        status_fb[i] = (status_fw[i] != 0 && status_bw[i] != 0 && dx * dx + dy * dy < params_.fb_thr2) ? 1 : 0;
+        if (!status_fb[i])
+            temporal_dropped++;
     }
 
     // update db with current frame points
@@ -101,8 +126,9 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     std::vector<cv::Point2f> pts_bw_stereo;
     std::vector<unsigned char> status_bw_stereo;
     tracker_spatial_.track(d_gray8_right_, d_gray8_left_, pts_fw_stereo, pts_bw_stereo, status_bw_stereo);
-
+    // std::cout << tracks_buffer_.pl().size() << " " << pts_bw_stereo.size() << std::endl;
     // gating/update db
+    uint16_t stereo_dropped = 0;
     std::vector<unsigned char> keep_stereo;
     keep_stereo.resize(tracks_buffer_.pl().size());
     for (size_t i = 0; i < status_fw_stereo.size(); ++i)
@@ -113,14 +139,23 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         float dy_epi = std::fabs(pts_fw_stereo[i].y - tracks_buffer_.pl()[i].y); // epipolar line ~ horizontal
         float disp = tracks_buffer_.pl()[i].x - pts_fw_stereo[i].x;              // positive disparity expected
 
-        keep_stereo[i] = (status_fw[i] != 0 && status_bw[i] != 0 && dx * dx + dy * dy < fb_thr2 && dy_epi < params_.stereo_epi_eps_y && disp > params_.stereo_disp_min && disp <= params_.stereo_disp_max) ? 1 : 0;
+        keep_stereo[i] = (status_fw[i] != 0 && status_bw[i] != 0 && dx * dx + dy * dy < params_.fb_thr2 && dy_epi < params_.stereo_epi_eps_y && disp > params_.stereo_disp_min && disp <= params_.stereo_disp_max) ? 1 : 0;
+        if (!keep_stereo[i])
+            stereo_dropped++;
     }
 
-    tracks_buffer_.applyKeepMask(keep_stereo); // stable compaction
+    tracks_buffer_.setRightInPlace(pts_fw_stereo); // add right points information
 
+    tracks_buffer_.applyKeepMask(keep_stereo); // stable compaction
+    // std::cout << "temporal dropped: " << temporal_dropped << ", stereo dropped: " << stereo_dropped << std::endl;
     // run pnp to get relative motion from previous to current frame
     // update tracks buffer gating by pnp inliers (or better said, remove pnp outliers, but keep those points that werent eligible for pnp)
     // re triangulate points in local frame and update DB
+
+
+
+
+
     // top up features
 
     // build CPU mask around survivors
@@ -129,7 +164,11 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
     std::vector<cv::Point2f> new_pts;
     uint16_t need = params_.target_features - tracks_buffer_.size();
+    if (need < 0)
+        need = 0;
+
     new_pts.reserve(need);
+    // std::cout << "need new features: " << need << std::endl;
     feature_detector_.detect(d_gray8_left_, d_mask_, new_pts, need);
 
     tracks_buffer_.addNewLeft(new_pts);

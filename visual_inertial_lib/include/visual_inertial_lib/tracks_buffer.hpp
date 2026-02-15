@@ -41,11 +41,9 @@ public:
     void applyKeepMask(const std::vector<uint8_t> &keep);
 
     // right points come later: fill partial or full
-    void setRightAll(const std::vector<cv::Point2f> &pr_new,
-                     const std::vector<uint8_t> *valid = nullptr);
-
-    void setRightForIndices(const std::vector<int> &indices,
-                            const std::vector<cv::Point2f> &pr_values);
+    // Refresh tracked right points (same ordering as tracks.pl()).
+    // Does NOT gate/drop anything
+    void setRightInPlace(const std::vector<cv::Point2f> &pr_new);
 
     // Prev-frame 3D comes from "previous frame" triangulation
     // computed elsewhere. This buffer just stores it aligned to tracks
