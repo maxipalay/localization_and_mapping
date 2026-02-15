@@ -220,3 +220,33 @@ void TracksBuffer::gatherPnP(std::vector<cv::Point3f> &object_pts,
             out_indices->push_back(static_cast<int>(i));
     }
 }
+
+void TracksBuffer::gateByPnPInliers(const std::vector<int>& candidate_buf_idx,
+                                                const std::vector<int>& inliers) {
+  // candidate_buf_idx.size() == number of correspondences used in PnP (eligible set)
+  // inliers are indices into [0, candidate_buf_idx.size()) returned by solvePnPRansac
+
+  const size_t N = ids_.size();
+
+  // Keep everything by default (pending tracks survive)
+  std::vector<uint8_t> keep(N, uint8_t{1});
+
+  // Mark candidate inliers in candidate-index space
+  std::vector<uint8_t> cand_is_inlier(candidate_buf_idx.size(), uint8_t{0});
+  for (int j : inliers) {
+    if (j >= 0 && static_cast<size_t>(j) < cand_is_inlier.size()) {
+      cand_is_inlier[static_cast<size_t>(j)] = uint8_t{1};
+    }
+  }
+
+  // Drop candidate outliers (map candidate -> buffer index)
+  for (size_t j = 0; j < candidate_buf_idx.size(); ++j) {
+    if (cand_is_inlier[j]) continue;
+    const int bi = candidate_buf_idx[j];
+    if (bi >= 0 && static_cast<size_t>(bi) < N) {
+      keep[static_cast<size_t>(bi)] = uint8_t{0};
+    }
+  }
+
+  applyKeepMask(keep);
+}

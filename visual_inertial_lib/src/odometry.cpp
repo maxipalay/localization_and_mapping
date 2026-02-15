@@ -82,7 +82,9 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     // get current tracks from buffer
     const auto &pl_prev = tracks_buffer_.pl();
 
-    /// Temporal tracking (FW+BW pass)
+    ///
+    /// SECTION - Temporal tracking (FW+BW pass)
+    ///
 
     // temporal feature tracking previous frame -> current frame
     std::vector<cv::Point2f> pts_fw;
@@ -116,7 +118,9 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     // apply the gating
     tracks_buffer_.applyKeepMask(status_fb); // stable compaction
 
-    /// Spatial/stereo tracking
+    ///
+    /// SECTION -  Spatial/stereo tracking
+    ///
 
     // spatial/cross camera feature tracking: left -> right  + backward pass
     std::vector<cv::Point2f> pts_fw_stereo;
@@ -150,8 +154,102 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
     // std::cout << "temporal dropped: " << temporal_dropped << ", stereo dropped: " << stereo_dropped << std::endl;
 
-    // run pnp to get relative motion from previous to current frame
-    // update tracks buffer gating by pnp inliers (or better said, remove pnp outliers, but keep those points that werent eligible for pnp)
+    ///
+    /// SECTION - PNP
+    /// run pnp to get relative motion from previous to current frame
+
+    // -----------------------------
+    // 3) Build eligible PnP correspondences using TracksBuffer::gatherPnP()
+    // -----------------------------
+    std::vector<cv::Point3f> object_pts;
+    std::vector<cv::Point2f> image_pts;
+    std::vector<int> buf_idx; // map: eligible index -> buffer index (needed for B-style gating)
+
+    tracks_buffer_.gatherPnP(object_pts, image_pts, &buf_idx);
+
+    int pnp_corresp = (int)object_pts.size();
+    if (object_pts.size() < 6)
+        std::cout << "[PNP] not enough points!" << std::endl;
+
+    if (object_pts.size() >= 6)
+    {
+        // -----------------------------
+        // 4) solvePnPRansac (AP3P) + refineLM on inliers
+        // -----------------------------
+        cv::Mat rvec, tvec;
+        std::vector<int> inliers;
+
+        const int iterationsCount = 100;  // TODO tune
+        const float reprojErrorPx = 2.0f; // TODO tune
+        const double confidence = 0.999;
+
+        cv::Matx33d K_left(
+            calibration_.left.K(0, 0), calibration_.left.K(0, 1), calibration_.left.K(0, 2),
+            calibration_.left.K(1, 0), calibration_.left.K(1, 1), calibration_.left.K(1, 2),
+            calibration_.left.K(2, 0), calibration_.left.K(2, 1), calibration_.left.K(2, 2));
+
+        bool ok = cv::solvePnPRansac(
+            object_pts, image_pts, K_left, cv::noArray(),
+            rvec, tvec,
+            false,
+            iterationsCount, reprojErrorPx, confidence,
+            inliers,
+            cv::SOLVEPNP_AP3P);
+
+        if (!ok || inliers.size() < 6)
+            std::cout << "[PNP] Error!" << std::endl;
+
+        // Refine using LM on inliers
+        {
+            std::vector<cv::Point3f> obj_in;
+            std::vector<cv::Point2f> img_in;
+            obj_in.reserve(inliers.size());
+            img_in.reserve(inliers.size());
+
+            for (int j : inliers)
+            {
+                obj_in.push_back(object_pts[(size_t)j]);
+                img_in.push_back(image_pts[(size_t)j]);
+            }
+
+            cv::TermCriteria crit(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, 1e-6); // TODO tune
+            cv::solvePnPRefineLM(obj_in, img_in, K_left, cv::Mat(), rvec, tvec, crit);
+        }
+
+        auto pnp_inliers = (int)inliers.size();
+
+        // -----------------------------
+        // 5) Gate DB based on PnP inliers (B-style: drop eligible outliers only)
+        // -----------------------------
+        tracks_buffer_.gateByPnPInliers(buf_idx, inliers);
+
+        // -----------------------------
+        // 6) Convert (rvec,tvec) -> Eigen::Isometry3d T_Ck_Ck1
+        // -----------------------------
+        {
+            cv::Mat R_cv;
+            cv::Rodrigues(rvec, R_cv);
+
+            Eigen::Matrix3d R;
+            Eigen::Vector3d t;
+            for (int r = 0; r < 3; ++r)
+            {
+                for (int c = 0; c < 3; ++c)
+                    R(r, c) = R_cv.at<double>(r, c);
+                t(r) = tvec.at<double>(r, 0);
+            }
+
+            auto T_Ck_Ck1 = Eigen::Isometry3d::Identity();
+            T_Ck_Ck1.linear() = R;
+            T_Ck_Ck1.translation() = t;
+
+            vo_pose_abs_ = vo_pose_abs_ * T_Ck_Ck1.inverse();
+        }
+    }
+    ///
+    /// SECTION - TRIANGULATE AND UPDATE DB
+    ///
+
     // re triangulate points in local frame and update DB
     const size_t N = tracks_buffer_.size();
     const auto &pl = tracks_buffer_.pl();
@@ -188,10 +286,12 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
     tracks_buffer_.applyKeepMask(valid_X); // drops those without valid 3D
 
-    // top up features
+    ///
+    /// SECTION - TOPUP
+    ///  top up features
 
     // build CPU mask around survivors
-    cv::Mat cpu_mask = buildExclusionMask(d_gray8_left_.size(), tracks_buffer_.pl(), 3.0); // TODO: make exclusion radius a param
+    cv::Mat cpu_mask = buildExclusionMask(d_gray8_left_.size(), tracks_buffer_.pl(), 6.0); // TODO: make exclusion radius a param
     d_mask_.upload(cpu_mask);
 
     std::vector<cv::Point2f> new_pts;
@@ -205,11 +305,18 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
     tracks_buffer_.addNewLeft(new_pts);
 
+    //
+    //
+    //
+
     // evaluate keyfrmae generation
     // if generate keyframe -> create a keyframe and put in return struct
     // convert pnp relative pose to body frame
     // compose estimate of absolute motion
 
+    ///
+    ///
+    ///
     cv::Mat result_left_tracking_after_stereo;
     cv::cvtColor(gray8_left, result_left_tracking_after_stereo, cv::COLOR_GRAY2BGR);
 
@@ -219,6 +326,11 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     }
 
     output.debug_viz = result_left_tracking_after_stereo;
+    output.vo_pose_abs = vo_pose_abs_;
+
+    ///
+    /// SECTION - UPDATE BUFFERS
+    ///
 
     d_gray8_left_prev_ = d_gray8_left_.clone();
 

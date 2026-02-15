@@ -18,7 +18,7 @@ public:
         float stereo_epi_eps_y = 1.5;
         float stereo_disp_min = 3.0;
         float stereo_disp_max = 255.0;
-        float fb_thr2 = 3.0 * 3.0;
+        float fb_thr2 = 1.5 * 1.5;
 
     };
 
@@ -54,5 +54,7 @@ private:
     cv::cuda::GpuMat d_gray8_left_{};
     cv::cuda::GpuMat d_gray8_right_{};
     cv::cuda::GpuMat d_gray8_left_prev_{};
+
+    Eigen::Isometry3d vo_pose_abs_ = Eigen::Isometry3d::Identity();
     
 };

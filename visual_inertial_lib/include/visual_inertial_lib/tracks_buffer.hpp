@@ -64,6 +64,11 @@ public:
                    std::vector<cv::Point2f> &image_pts,
                    std::vector<int> *out_indices = nullptr) const;
 
+    // update tracks buffer gating by pnp inliers (or better said, 
+    // remove pnp outliers, but keep those points that werent eligible for pnp)
+    void gateByPnPInliers(const std::vector<int> &candidate_buf_idx,
+                                      const std::vector<int> &inliers);
+
 private:
     TrackId next_id_ = 1;
 
