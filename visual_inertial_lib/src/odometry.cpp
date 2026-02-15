@@ -7,23 +7,23 @@
 
 // Inputs: pl[i], pr[i] in pixels (rectified); intrinsics fx, fy, cx, cy; baseline B (meters)
 bool triangulateRectified(
-    const cv::Point2f& pl, const cv::Point2f& pr,
+    const cv::Point2f &pl, const cv::Point2f &pr,
     float fx, float fy, float cx, float cy, float B,
-    cv::Point3f& X_out)
+    cv::Point3f &X_out)
 {
-  const float d = pl.x - pr.x;              // disparity
+    const float d = pl.x - pr.x; // disparity
 
-  const float z = fx * B / d;
+    const float z = fx * B / d;
 
-  if (!std::isfinite(z) || z <= 0.f) return false;
+    if (!std::isfinite(z) || z <= 0.f)
+        return false;
 
-  const float x = (pl.x - cx) * z / fx;
-  const float y = (pl.y - cy) * z / fy;
-  X_out = cv::Point3f(x, y, z);
+    const float x = (pl.x - cx) * z / fx;
+    const float y = (pl.y - cy) * z / fy;
+    X_out = cv::Point3f(x, y, z);
 
-  return true;
+    return std::isfinite(x) && std::isfinite(y);
 }
-
 
 VisualInertial::VisualInertial(const Params &p)
     : params_(p),
@@ -78,7 +78,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         return output;
     }
     tracks_buffer_.beginFrame();
-    
+
     // get current tracks from buffer
     const auto &pl_prev = tracks_buffer_.pl();
 
@@ -147,14 +147,46 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     tracks_buffer_.setRightInPlace(pts_fw_stereo); // add right points information
 
     tracks_buffer_.applyKeepMask(keep_stereo); // stable compaction
+
     // std::cout << "temporal dropped: " << temporal_dropped << ", stereo dropped: " << stereo_dropped << std::endl;
+
     // run pnp to get relative motion from previous to current frame
     // update tracks buffer gating by pnp inliers (or better said, remove pnp outliers, but keep those points that werent eligible for pnp)
     // re triangulate points in local frame and update DB
+    const size_t N = tracks_buffer_.size();
+    const auto &pl = tracks_buffer_.pl();
+    const auto &pr = tracks_buffer_.pr();
+    const auto &has_r = tracks_buffer_.hasRight();
 
+    std::vector<cv::Point3f> X_curr;
+    std::vector<uint8_t> valid_X;
+    X_curr.resize(N);
+    valid_X.resize(N);
 
+    for (size_t i = 0; i < N; ++i)
+    {
+        if (!has_r[i])
+        {
+            valid_X[i] = 0;
+            X_curr[i] = cv::Point3f(0.f, 0.f, 0.f);
+            continue;
+        }
 
+        cv::Point3f X;
+        const bool ok = triangulateRectified(
+            pl[i], pr[i],
+            calibration_.left.fx(), calibration_.left.fy(), calibration_.left.cx(), calibration_.left.cy(),
+            calibration_.baseline,
+            X);
 
+        valid_X[i] = ok ? uint8_t{1} : uint8_t{0};
+        X_curr[i] = ok ? X : cv::Point3f(0.f, 0.f, 0.f);
+    }
+
+    // Store as "prev 3D" for next frame's PnP
+    tracks_buffer_.setPrev3DAll(X_curr, &valid_X);
+
+    tracks_buffer_.applyKeepMask(valid_X); // drops those without valid 3D
 
     // top up features
 
@@ -187,7 +219,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     }
 
     output.debug_viz = result_left_tracking_after_stereo;
-    
+
     d_gray8_left_prev_ = d_gray8_left_.clone();
 
     return output;
