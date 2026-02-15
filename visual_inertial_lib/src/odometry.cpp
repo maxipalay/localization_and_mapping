@@ -244,6 +244,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
             T_Ck_Ck1.translation() = t;
 
             vo_pose_abs_ = vo_pose_abs_ * T_Ck_Ck1.inverse();
+            output.vo_pose_rel = T_Ck_Ck1.inverse();
         }
     }
     ///
