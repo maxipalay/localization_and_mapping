@@ -4,6 +4,7 @@
 #include "visual_inertial_lib/feature_tracker.hpp"
 #include "visual_inertial_lib/feature_detector.hpp"
 #include "visual_inertial_lib/types.hpp"
+#include "visual_inertial_lib/keyframe_policy.hpp"
 
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/calib3d.hpp>
@@ -48,6 +49,7 @@ private:
     FeatureDetector feature_detector_;
     FeatureTracker tracker_temporal_;
     FeatureTracker tracker_spatial_;
+    KeyframePolicy keyframe_policy_;
 
     cv::cuda::Stream stream_{};
     cv::cuda::GpuMat d_mask_{}; // mask on device for feature top-up
@@ -56,5 +58,7 @@ private:
     cv::cuda::GpuMat d_gray8_left_prev_{};
 
     Eigen::Isometry3d vo_pose_abs_ = Eigen::Isometry3d::Identity();
+
+    uint64_t next_kf_id_ = 0;
     
 };

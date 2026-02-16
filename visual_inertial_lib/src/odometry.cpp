@@ -307,16 +307,49 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     tracks_buffer_.addNewLeft(new_pts);
 
     //
+    // SECTION - KEYFRAME EVALUATION AND CREATION
     //
-    //
-
     // evaluate keyfrmae generation
     // if generate keyframe -> create a keyframe and put in return struct
-    // convert pnp relative pose to body frame
-    // compose estimate of absolute motion
+
+    // 1) Ask the policy if we should create a keyframe
+    KeyframePolicy::Input kf_in;
+    kf_in.t_s = stamp;
+    kf_in.T_WC = vo_pose_abs_;
+    kf_in.pose_valid = true; // or: have_vo (if you only trust motion triggers when VO succeeded)
+
+    kf_in.track_ids = tracks_buffer_.ids().data();
+    kf_in.num_tracks = tracks_buffer_.ids().size();
+
+    KeyframePolicy::Decision dec = keyframe_policy_.evaluate(kf_in);
+
+    // 2) If yes: build the keyframe event (1–10 Hz, copying vectors is fine)
+    if (dec.make_keyframe)
+    {
+        KeyframeEvent ev;
+        ev.kf_id = next_kf_id_++;
+        ev.t_s = stamp;
+        ev.T_WC = vo_pose_abs_;
+
+        // Tracks in deterministic order (same order across ids/pl/pr)
+        ev.ids = tracks_buffer_.ids();
+        ev.pl = tracks_buffer_.pl();
+        ev.pr = tracks_buffer_.pr();
+
+        // 4) Inform policy that the keyframe was accepted/created
+        //    (policy stores last-kf pose/time + last-kf ids for overlap logic)
+        keyframe_policy_.onKeyframeCreated(ev.kf_id, ev.t_s, ev.T_WC, ev.ids);
+    }
+
+    // debug
+
+    if (dec.make_keyframe)
+    {
+        std::cout << keyframeDecisionDebugLine(dec) << "\n";
+    }
 
     ///
-    ///
+    /// SECTION - DRAW RESULTS
     ///
     cv::Mat result_left_tracking_after_stereo;
     cv::cvtColor(gray8_left, result_left_tracking_after_stereo, cv::COLOR_GRAY2BGR);

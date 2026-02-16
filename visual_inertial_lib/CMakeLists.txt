@@ -16,6 +16,7 @@ add_library(${PROJECT_NAME} SHARED
   src/feature_tracker.cpp
   src/tracks_buffer.cpp
   src/odometry.cpp
+  src/keyframe_policy.cpp
 )
 
 ament_target_dependencies(${PROJECT_NAME}
