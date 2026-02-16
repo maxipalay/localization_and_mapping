@@ -335,6 +335,8 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         ev.ids = tracks_buffer_.ids();
         ev.pl = tracks_buffer_.pl();
         ev.pr = tracks_buffer_.pr();
+        ev.has_r = tracks_buffer_.hasRight();   // or whatever you name it
+
 
         // 4) Inform policy that the keyframe was accepted/created
         //    (policy stores last-kf pose/time + last-kf ids for overlap logic)

@@ -10,6 +10,9 @@
 #include "visual_inertial_lib/types.hpp"
 #include "visual_inertial_lib/odometry.hpp"
 
+#include "visual_inertial/msg/keyframe.hpp"
+#include <std_msgs/msg/header.hpp>
+
 #include <image_transport/subscriber_filter.hpp>
 #include <message_filters/sync_policies/exact_time.h>
 #include <message_filters/synchronizer.h>
@@ -29,23 +32,22 @@
 //
 // Convention: T maps points as p_out = T * p_in (i.e., "destination <- source").
 // This applies a fixed change-of-basis on both rotation and translation.
-inline Eigen::Isometry3d poseOpticalToRos(const Eigen::Isometry3d& T_in)
+inline Eigen::Isometry3d poseOpticalToRos(const Eigen::Isometry3d &T_in)
 {
-  // Same matrix as your cv::Matx33d
-  static const Eigen::Matrix3d R_ros_opt =
-      (Eigen::Matrix3d() <<
-         0.0, 0.0, 1.0,
-        -1.0, 0.0, 0.0,
-         0.0,-1.0, 0.0).finished();
+    // Same matrix as your cv::Matx33d
+    static const Eigen::Matrix3d R_ros_opt =
+        (Eigen::Matrix3d() << 0.0, 0.0, 1.0,
+         -1.0, 0.0, 0.0,
+         0.0, -1.0, 0.0)
+            .finished();
 
-  const Eigen::Matrix3d R_opt_ros = R_ros_opt.transpose();
+    const Eigen::Matrix3d R_opt_ros = R_ros_opt.transpose();
 
-  Eigen::Isometry3d T_out = Eigen::Isometry3d::Identity();
-  T_out.linear()      = R_ros_opt * T_in.linear() * R_opt_ros;
-  T_out.translation() = R_ros_opt * T_in.translation();
-  return T_out;
+    Eigen::Isometry3d T_out = Eigen::Isometry3d::Identity();
+    T_out.linear() = R_ros_opt * T_in.linear() * R_opt_ros;
+    T_out.translation() = R_ros_opt * T_in.translation();
+    return T_out;
 }
-
 
 static inline geometry_msgs::msg::Quaternion R_to_quat(const cv::Matx33d &R)
 {
@@ -157,6 +159,12 @@ public:
 
         RCLCPP_INFO(get_logger(), "Stereo: L='%s' R='%s' transport='%s'",
                     input_topic_left_.c_str(), input_topic_right_.c_str(), transport_.c_str());
+
+        auto qos = rclcpp::QoS(rclcpp::KeepLast(10))
+                       .reliable()
+                       .durability_volatile();
+
+        kf_pub_ = this->create_publisher<visual_inertial::msg::Keyframe>("keyframes", qos);
     }
 
 private:
@@ -168,6 +176,8 @@ private:
     // member:
     std::unique_ptr<VisualInertial> visual_inertial_;
     image_transport::Publisher it_pub_;
+
+    rclcpp::Publisher<visual_inertial::msg::Keyframe>::SharedPtr kf_pub_;
 
     std::string input_topic_left_, input_topic_right_, transport_;
     std::string left_info_t, right_info_t;
@@ -234,7 +244,6 @@ private:
         tf_msg.transform.rotation.z = q.z();
         tf_broadcaster_->sendTransform(tf_msg);
 
-        
         tf_msg.header.stamp = left_msg->header.stamp;
         tf_msg.header.frame_id = parent_frame_;
         tf_msg.child_frame_id = "rel";
@@ -257,6 +266,43 @@ private:
                              rclcpp::Time(left_msg->header.stamp).seconds());
         RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
                              "imageCb wall: %.3f ms (%.1f FPS)", ms, 1000.0 / std::max(ms, 0.001));
+
+        if (result.kf_valid)
+        {
+            visual_inertial::msg::Keyframe msg;
+            msg.header.stamp = left_msg->header.stamp; // or rclcpp::Clock().now()
+            msg.header.frame_id = "world";             // set your world frame
+            msg.kf_id = result.kf.kf_id;
+
+            msg.pose_wc.position.x = result.kf.T_WC.translation().x();
+            msg.pose_wc.position.y = result.kf.T_WC.translation().y();
+            msg.pose_wc.position.z = result.kf.T_WC.translation().z();
+            Eigen::Quaterniond q(result.kf.T_WC.rotation());
+            msg.pose_wc.orientation.w = q.w();
+            msg.pose_wc.orientation.x = q.x();
+            msg.pose_wc.orientation.y = q.y();
+            msg.pose_wc.orientation.z = q.z();
+
+            const auto N = result.kf.ids.size();
+            msg.track_ids.resize(N);
+            msg.u_l.resize(N);
+            msg.v_l.resize(N);
+            msg.u_r.resize(N);
+            msg.v_r.resize(N);
+            msg.has_right.resize(N);
+
+            for (size_t i = 0; i < N; ++i)
+            {
+                msg.track_ids[i] = result.kf.ids[i];
+                msg.u_l[i] = result.kf.pl[i].x;
+                msg.v_l[i] = result.kf.pl[i].y;
+                msg.u_r[i] = result.kf.pr[i].x;
+                msg.v_r[i] = result.kf.pr[i].y;
+                msg.has_right[i] = result.kf.has_r[i];
+            }
+
+            kf_pub_->publish(msg);
+        }
     }
 
     CameraRig makeStereoModel(
