@@ -1,4 +1,4 @@
-#include "visual_inertial_lib/feature_tracker.hpp"
+#include "visual_inertial_frontend/feature_tracker.hpp"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/video.hpp> // CPU matchTemplate if desired
 #include <cstring>           // std::memcpy

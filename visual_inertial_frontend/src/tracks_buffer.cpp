@@ -1,5 +1,5 @@
 // TracksBuffer.cpp
-#include "visual_inertial_lib/tracks_buffer.hpp"
+#include "visual_inertial_frontend/tracks_buffer.hpp"
 
 #include <algorithm>
 #include <cassert>

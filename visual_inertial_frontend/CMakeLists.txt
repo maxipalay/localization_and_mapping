@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(visual_inertial_lib LANGUAGES CXX)
+project(visual_inertial_frontend LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,6 +10,7 @@ find_package(ament_cmake REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(OpenCV REQUIRED)  # your OpenCV was already built with CUDA
 find_package(GTSAM REQUIRED)
+find_package(visual_inertial_common REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
   src/feature_detector.cpp
@@ -35,6 +36,7 @@ target_link_libraries(${PROJECT_NAME}
   ${OpenCV_LIBS}
   gtsam
   gtsam_unstable
+  visual_inertial_common::visual_inertial_common
 )
 
 # -------- Install targets + export set (names MUST match) --------

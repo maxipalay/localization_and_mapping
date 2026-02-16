@@ -7,8 +7,8 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
 
-#include "visual_inertial_lib/types.hpp"
-#include "visual_inertial_lib/odometry.hpp"
+#include "visual_inertial_frontend/types.hpp"
+#include "visual_inertial_frontend/odometry.hpp"
 
 #include "visual_inertial/msg/keyframe.hpp"
 #include <std_msgs/msg/header.hpp>

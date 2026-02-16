@@ -3,7 +3,7 @@
 // tracks can agglomerate in certain regions, would be good to implement a strategy for topup that uses some sort of grid
 // do we want to keep tracks age? maybe the older a track is the more I can trust it?
 
-#include "visual_inertial_lib/odometry.hpp"
+#include "visual_inertial_frontend/odometry.hpp"
 
 // Inputs: pl[i], pr[i] in pixels (rectified); intrinsics fx, fy, cx, cy; baseline B (meters)
 bool triangulateRectified(

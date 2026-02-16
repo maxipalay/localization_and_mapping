@@ -9,8 +9,11 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <build_depend>visual_inertial_lib</build_depend>
-  <exec_depend>visual_inertial_lib</exec_depend>
+  <build_depend>visual_inertial_frontend</build_depend>
+  <exec_depend>visual_inertial_frontend</exec_depend>
+
+    <build_depend>visual_inertial_common</build_depend>
+  <exec_depend>visual_inertial_common</exec_depend>
 
   <depend>builtin_interfaces</depend>
   <depend>std_msgs</depend>

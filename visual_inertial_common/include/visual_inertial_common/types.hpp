@@ -54,14 +54,3 @@ struct KeyframeEvent
     std::vector<cv::Point2f> pr; // right image coords (pixels) (same ordering)
     std::vector<uint8_t> has_r;  // optional: 1 if pr[i] is valid, else 0
 };
-
-struct FrameResult
-{
-    Eigen::Isometry3d vo_pose_abs = Eigen::Isometry3d::Identity();
-    Eigen::Isometry3d vo_pose_rel = Eigen::Isometry3d::Identity();
-
-    bool kf_valid = false;
-    KeyframeEvent kf;
-
-    cv::Mat debug_viz;
-};

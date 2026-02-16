@@ -1,11 +1,11 @@
 #pragma once
 
-#include "visual_inertial_lib/tracks_buffer.hpp"
-#include "visual_inertial_lib/feature_tracker.hpp"
-#include "visual_inertial_lib/feature_detector.hpp"
-#include "visual_inertial_lib/types.hpp"
-#include "visual_inertial_lib/keyframe_policy.hpp"
-
+#include "visual_inertial_frontend/tracks_buffer.hpp"
+#include "visual_inertial_frontend/feature_tracker.hpp"
+#include "visual_inertial_frontend/feature_detector.hpp"
+#include "visual_inertial_frontend/types.hpp"
+#include "visual_inertial_frontend/keyframe_policy.hpp"
+#include "visual_inertial_common/types.hpp"
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/calib3d.hpp>
 #include <iostream>

@@ -9,7 +9,8 @@ find_package(rclcpp REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(visual_inertial_lib REQUIRED)  # uses the installed export
+find_package(visual_inertial_frontend REQUIRED)  # uses the installed export
+find_package(visual_inertial_common REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(nav_msgs REQUIRED)
 
@@ -22,10 +23,11 @@ add_executable(tracking_node src/tracking_node.cpp)
 
 # Pull include dirs/defs from deps (including your lib)
 ament_target_dependencies(tracking_node
-  rclcpp sensor_msgs cv_bridge image_transport OpenCV visual_inertial_lib tf2_ros)
+  rclcpp sensor_msgs cv_bridge image_transport OpenCV visual_inertial_frontend visual_inertial_common tf2_ros)
 
 target_link_libraries(tracking_node
-  visual_inertial_lib::visual_inertial_lib
+  visual_inertial_frontend::visual_inertial_frontend
+  visual_inertial_common::visual_inertial_common
 )
 
 install(TARGETS tracking_node
@@ -36,7 +38,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES builtin_interfaces sensor_msgs geometry_msgs
 )
 
-rosidl_target_interfaces(tracking_node ${PROJECT_NAME} "rosidl_typesupport_cpp")
+rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_typesupport_cpp")
+target_link_libraries(tracking_node "${cpp_typesupport_target}")
 
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
 

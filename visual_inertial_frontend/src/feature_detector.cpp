@@ -1,4 +1,4 @@
-#include "visual_inertial_lib/feature_detector.hpp"
+#include "visual_inertial_frontend/feature_detector.hpp"
 
 void FeatureDetector::ensureDetector_()
 {
