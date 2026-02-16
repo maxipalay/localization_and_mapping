@@ -339,6 +339,8 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         // 4) Inform policy that the keyframe was accepted/created
         //    (policy stores last-kf pose/time + last-kf ids for overlap logic)
         keyframe_policy_.onKeyframeCreated(ev.kf_id, ev.t_s, ev.T_WC, ev.ids);
+        output.kf_valid = true;
+        output.kf = ev;
     }
 
     // debug
