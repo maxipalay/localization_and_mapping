@@ -135,7 +135,7 @@ public:
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
         // (optional) let users override frame ids
-        parent_frame_ = this->declare_parameter<std::string>("parent_frame_id", "map");
+        parent_frame_ = this->declare_parameter<std::string>("parent_frame_id", "odom");
         child_frame_ = this->declare_parameter<std::string>("child_frame_id", "body");
 
         visual_inertial_ = std::make_unique<VisualInertial>();
