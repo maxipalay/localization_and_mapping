@@ -6,9 +6,9 @@
 
 #include <visual_inertial/msg/keyframe.hpp>
 
-#include <visual_inertial_common/types.hpp>              
-#include <visual_inertial_optimization/optimization.hpp> 
-#include <visual_inertial_optimization/types.hpp>        
+#include <visual_inertial_common/types.hpp>
+#include <visual_inertial_optimization/optimization.hpp>
+#include <visual_inertial_optimization/types.hpp>
 
 #include <opencv2/core.hpp>
 
@@ -23,6 +23,7 @@
 #include <memory>
 #include <cmath>
 #include <algorithm>
+#include <chrono>
 
 namespace {
 
@@ -69,7 +70,6 @@ static KeyframeEvent toKeyframeEvent(const visual_inertial::msg::Keyframe& msg) 
   ev.T_WC = poseMsgToIso(msg.pose_wc);
 
   const size_t n = msg.track_ids.size();
-  // Basic sanity; if mismatched, drop (caller handles)
   if (msg.u_l.size() != n || msg.v_l.size() != n ||
       msg.u_r.size() != n || msg.v_r.size() != n ||
       msg.has_right.size() != n) {
@@ -92,12 +92,10 @@ static KeyframeEvent toKeyframeEvent(const visual_inertial::msg::Keyframe& msg) 
   return ev;
 }
 
-// Same strategy you already use in tracking node.
 static CameraRig makeStereoModel(
     const sensor_msgs::msg::CameraInfo& L,
     const sensor_msgs::msg::CameraInfo& R)
 {
-
   CameraRig rig;
 
   auto fetch = [](const sensor_msgs::msg::CameraInfo& info, int idx_p, int idx_k) -> double {
@@ -114,7 +112,6 @@ static CameraRig makeStereoModel(
                  0.0,           fetch(R, 5, 4), fetch(R, 6, 5),
                  0.0,           0.0,           1.0;
 
-  // Baseline from right projection matrix: P = [fx 0 cx Tx*fx; ...]
   const double fx_r = rig.right.K(0, 0);
   double Tx = 0.0;
   if (R.p.size() == 12 && std::abs(fx_r) > 1e-9) {
@@ -140,6 +137,9 @@ public:
     map_frame_id_  = declare_parameter<std::string>("map_frame_id", "map");
     odom_frame_id_ = declare_parameter<std::string>("odom_frame_id", "odom");
 
+    // Broadcast rate for map->odom
+    tf_pub_rate_hz_ = declare_parameter<double>("tf_pub_rate_hz", 30.0);
+
     // Backend config params
     cfg_.window_size = static_cast<size_t>(declare_parameter<int>("window_size", 8));
     cfg_.stereo_sigma_px = declare_parameter<double>("stereo_sigma_px", 1.0);
@@ -159,16 +159,32 @@ public:
     // -------- TF broadcaster --------
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
-    // -------- QoS --------
-    // Keyframes are low-rate and important: reliable, small queue.
-    auto kf_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
+    // -------- TF timer (constant-rate rebroadcast of latest T_map_odom) --------
+    using namespace std::chrono_literals;
+    const auto period = (tf_pub_rate_hz_ > 1e-6)
+                        ? std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(1.0 / tf_pub_rate_hz_))
+                        : 33ms;
 
-    // CameraInfo often comes at image rate; reliable is fine.
-    // If your CameraInfo is published with transient_local durability and you want "latched" behavior,
-    // change to: .transient_local()
+    tf_timer_ = create_wall_timer(period, [this]() {
+      if (!have_map_odom_.load()) return;
+
+      Eigen::Isometry3d T_map_odom;
+      {
+        std::lock_guard<std::mutex> lk(tf_mtx_);
+        T_map_odom = last_T_map_odom_;
+      }
+
+      // Stamp with "now" so TF consumers always have a fresh transform.
+      // Works with /use_sim_time too (node clock).
+      const auto tf = isoToTf(T_map_odom, this->now(), map_frame_id_, odom_frame_id_);
+      tf_broadcaster_->sendTransform(tf);
+    });
+
+    // -------- QoS --------
+    auto kf_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
     auto info_qos = rclcpp::SensorDataQoS();
 
-    // -------- Subscriptions: CameraInfo (Option A) --------
+    // -------- Subscriptions: CameraInfo --------
     left_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
       left_info_topic_, info_qos,
       [this](sensor_msgs::msg::CameraInfo::SharedPtr msg) {
@@ -189,7 +205,6 @@ public:
     kf_sub_ = create_subscription<visual_inertial::msg::Keyframe>(
       keyframe_topic_, kf_qos,
       [this](visual_inertial::msg::Keyframe::SharedPtr msg) {
-        // Hot path: enqueue + return
         {
           std::lock_guard<std::mutex> lk(q_mtx_);
           kf_q_.push_back(*msg);
@@ -203,9 +218,9 @@ public:
     worker_ = std::thread([this]() { workerLoop_(); });
 
     RCLCPP_INFO(get_logger(),
-                "Optimization node started. Subscribing: KF=%s, L_info=%s, R_info=%s. Broadcasting TF %s->%s",
+                "Optimization node started. KF=%s L_info=%s R_info=%s TF=%s->%s @ %.1f Hz",
                 keyframe_topic_.c_str(), left_info_topic_.c_str(), right_info_topic_.c_str(),
-                map_frame_id_.c_str(), odom_frame_id_.c_str());
+                map_frame_id_.c_str(), odom_frame_id_.c_str(), tf_pub_rate_hz_);
   }
 
   ~OptimizationNode() override {
@@ -216,7 +231,6 @@ public:
 
 private:
   void maybeInitRigAndOptimizer_() {
-    // calib_mtx_ must be held by caller
     if (rig_ready_) return;
     if (!left_info_.has_value() || !right_info_.has_value()) return;
 
@@ -228,7 +242,6 @@ private:
 
     cfg_.rig = rig;
 
-    // Create optimizer now that we have rig.
     {
       std::lock_guard<std::mutex> lk(opt_mtx_);
       optimizer_ = std::make_shared<Optimizer>(cfg_);
@@ -244,7 +257,6 @@ private:
     while (rclcpp::ok() && !stop_.load()) {
       visual_inertial::msg::Keyframe msg;
 
-      // Wait for a keyframe
       {
         std::unique_lock<std::mutex> lk(q_mtx_);
         q_cv_.wait(lk, [&] { return stop_.load() || !kf_q_.empty(); });
@@ -254,9 +266,7 @@ private:
         kf_q_.pop_front();
       }
 
-      // If not calibrated yet, just keep draining slowly (or you can re-enqueue).
       if (!rig_ready_) {
-        // Avoid spamming logs; only occasionally.
         static uint64_t warn_ctr = 0;
         if ((warn_ctr++ % 50) == 0) {
           RCLCPP_WARN(get_logger(), "Waiting for CameraInfo calibration; dropping keyframes for now...");
@@ -264,7 +274,6 @@ private:
         continue;
       }
 
-      // Grab optimizer instance (thread-safe)
       std::shared_ptr<Optimizer> opt;
       {
         std::lock_guard<std::mutex> lk(opt_mtx_);
@@ -272,27 +281,24 @@ private:
       }
       if (!opt) continue;
 
-      // Convert KF msg -> KeyframeEvent
       const auto ev = toKeyframeEvent(msg);
-      if (ev.ids.empty()) continue; // conversion failed or empty KF
+      if (ev.ids.empty()) continue;
 
-      // If you later add VO delta to your message, fill it here.
       std::optional<Eigen::Isometry3d> T_Ck_Ckm1 = std::nullopt;
 
-      // Run backend update (heavy work off callback thread)
       const auto res = opt->push(ev, T_Ck_Ckm1);
       if (!res) continue;
 
-      // Compute and broadcast map -> odom
-      //
-      // Treat frontend pose_wc as odom <- camera (drifty VO world)
-      // Backend returns map <- camera (optimized)
+      // Update cached map->odom correction (timer will broadcast it at constant rate)
       const Eigen::Isometry3d T_odom_C = poseMsgToIso(msg.pose_wc);
       const Eigen::Isometry3d T_map_C  = res->T_WC_opt;
-
       const Eigen::Isometry3d T_map_odom = T_map_C * T_odom_C.inverse();
-      const auto tf = isoToTf(T_map_odom, msg.header.stamp, map_frame_id_, odom_frame_id_);
-      tf_broadcaster_->sendTransform(tf);
+
+      {
+        std::lock_guard<std::mutex> lk(tf_mtx_);
+        last_T_map_odom_ = T_map_odom;
+      }
+      have_map_odom_.store(true);
     }
   }
 
@@ -304,6 +310,9 @@ private:
   std::string map_frame_id_;
   std::string odom_frame_id_;
 
+  double tf_pub_rate_hz_{30.0};
+  rclcpp::TimerBase::SharedPtr tf_timer_;
+
   // Subscriptions
   rclcpp::Subscription<visual_inertial::msg::Keyframe>::SharedPtr kf_sub_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_sub_;
@@ -312,7 +321,12 @@ private:
   // TF
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
-  // Calibration state (Option A)
+  // Latest map->odom cached transform
+  std::mutex tf_mtx_;
+  Eigen::Isometry3d last_T_map_odom_ = Eigen::Isometry3d::Identity();
+  std::atomic<bool> have_map_odom_{false};
+
+  // Calibration state
   std::mutex calib_mtx_;
   std::optional<sensor_msgs::msg::CameraInfo> left_info_;
   std::optional<sensor_msgs::msg::CameraInfo> right_info_;
