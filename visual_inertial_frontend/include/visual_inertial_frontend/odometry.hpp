@@ -60,5 +60,7 @@ private:
     Eigen::Isometry3d vo_pose_abs_ = Eigen::Isometry3d::Identity();
 
     uint64_t next_kf_id_ = 0;
+
+    double timestamp_last_kf_ = 0.0;
     
 };

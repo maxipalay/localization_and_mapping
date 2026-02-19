@@ -4,6 +4,9 @@
 
 std_msgs/Header header          # header.stamp = keyframe time, header.frame_id = "world" (recommended)
 
+float32 t_start
+float32 t_end
+
 uint64 kf_id
 
 # Pose of LEFT camera in world coordinates (World <- Camera).

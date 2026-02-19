@@ -3,6 +3,14 @@
 // tracks can agglomerate in certain regions, would be good to implement a strategy for topup that uses some sort of grid
 // do we want to keep tracks age? maybe the older a track is the more I can trust it?
 
+// special case to handle
+// First keyframe
+// There is no “previous keyframe time”:
+// publish KF with time_start = time_end and no IMU packet (or packet marked invalid)
+// backend uses priors to bootstrap, and the first IMU factor starts at KF0→KF1
+
+// double check time sources to use, if we grab from frames header or we use the stamp provided by the node
+
 #include "visual_inertial_frontend/odometry.hpp"
 
 // Inputs: pl[i], pr[i] in pixels (rectified); intrinsics fx, fy, cx, cy; baseline B (meters)
@@ -328,7 +336,8 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     {
         KeyframeEvent ev;
         ev.kf_id = next_kf_id_++;
-        ev.t_s = stamp;
+        ev.t_start = timestamp_last_kf_;
+        ev.t_end = stamp;
         ev.T_WC = vo_pose_abs_;
 
         // Tracks in deterministic order (same order across ids/pl/pr)
@@ -340,9 +349,11 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
         // 4) Inform policy that the keyframe was accepted/created
         //    (policy stores last-kf pose/time + last-kf ids for overlap logic)
-        keyframe_policy_.onKeyframeCreated(ev.kf_id, ev.t_s, ev.T_WC, ev.ids);
+        keyframe_policy_.onKeyframeCreated(ev.kf_id, ev.t_end, ev.T_WC, ev.ids);
         output.kf_valid = true;
         output.kf = ev;
+
+        timestamp_last_kf_ = stamp; // update last stamp
     }
 
     // debug

@@ -42,7 +42,8 @@ struct KeyframeEvent
 
     // Identity / timing
     uint64_t kf_id = 0;
-    double t_s = 0.0;
+    double t_start = 0.0;
+    double t_end = 0.0;
 
     // Pose of the LEFT camera in world coordinates (World <- Camera)
     Eigen::Isometry3d T_WC = Eigen::Isometry3d::Identity();
@@ -53,4 +54,43 @@ struct KeyframeEvent
     std::vector<cv::Point2f> pl; // left image coords (pixels)
     std::vector<cv::Point2f> pr; // right image coords (pixels) (same ordering)
     std::vector<uint8_t> has_r;  // optional: 1 if pr[i] is valid, else 0
+};
+
+// Bias estimate (gyro + accel), units: rad/s and m/s^2
+struct ImuBias
+{
+    Eigen::Vector3d gyro = Eigen::Vector3d::Zero();
+    Eigen::Vector3d accel = Eigen::Vector3d::Zero();
+};
+
+// Optional “backend feedback” bundle.
+// If you later want frontend propagation to be consistent, this is what you’d feed back.
+struct ViState
+{
+    double t_s = 0.0;
+    Eigen::Isometry3d T_WB = Eigen::Isometry3d::Identity();
+    Eigen::Vector3d v_WB = Eigen::Vector3d::Zero();
+    ImuBias bias;
+    bool valid = false;
+};
+
+// What the frontend will attach to a keyframe message when you move preintegration to frontend.
+// bytes contains a boost-serialized gtsam::PreintegratedCombinedMeasurements.
+
+struct PreintegratedImuPacket
+{
+    uint64_t kf_id0 = 0;
+    uint64_t kf_id1 = 0;
+
+    double t0_s = 0.0; // interval start (camera time)
+    double t1_s = 0.0; // interval end   (camera time)
+    double dt_s = 0.0;
+
+    ImuBias bias_hat;                  // bias linearization point used during integration
+    uint32_t num_samples = 0;          // samples used in this interval
+    uint32_t num_gaps = 0;             // dt gaps detected (diagnostic)
+    uint32_t dropped_out_of_order = 0; // diagnostic
+
+    std::vector<uint8_t> bytes; // boost-serialized GTSAM PIM
+    bool valid = false;
 };

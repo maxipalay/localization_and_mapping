@@ -67,8 +67,9 @@ namespace
     {
         KeyframeEvent ev;
         ev.kf_id = msg.kf_id;
-        ev.t_s = rclcpp::Time(msg.header.stamp).seconds();
-
+        ev.t_start = msg.t_start; //rclcpp::Time(msg.header.stamp).seconds();
+        ev.t_end = msg.t_end;
+        
         // Frontend pose: World(odom) <- Camera(LEFT optical)
         ev.T_WC = poseMsgToIso(msg.pose_wc);
 

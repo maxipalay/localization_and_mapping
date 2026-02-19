@@ -273,6 +273,8 @@ private:
             msg.header.stamp = left_msg->header.stamp; // or rclcpp::Clock().now()
             msg.header.frame_id = "world";             // set your world frame
             msg.kf_id = result.kf.kf_id;
+            msg.t_start = result.kf.t_start;
+            msg.t_end = result.kf.t_end;
 
             msg.pose_wc.position.x = result.kf.T_WC.translation().x();
             msg.pose_wc.position.y = result.kf.T_WC.translation().y();

@@ -14,3 +14,12 @@ struct FrameResult
 
     cv::Mat debug_viz;
 };
+
+// IMU sample in IMU frame (or "body").
+// gyro: rad/s, accel: m/s^2, timestamps in seconds (same clock domain as camera stamps).
+struct ImuSample
+{
+    double t_s = 0.0;
+    Eigen::Vector3d accel = Eigen::Vector3d::Zero();
+    Eigen::Vector3d gyro = Eigen::Vector3d::Zero();
+};

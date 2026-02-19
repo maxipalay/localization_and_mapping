@@ -155,7 +155,7 @@ std::optional<OptimizationResult> Optimizer::push(
 
   OptimizationResult out;
   out.kf_id = kf.kf_id;
-  out.t_s   = kf.t_s;
+  out.t_s   = kf.t_end;
 
   try {
     const gtsam::Pose3 T_WB_opt_g = smoother_.calculateEstimate<gtsam::Pose3>(xk);
