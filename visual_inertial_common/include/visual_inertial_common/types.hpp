@@ -54,6 +54,9 @@ struct KeyframeEvent
     std::vector<cv::Point2f> pl; // left image coords (pixels)
     std::vector<cv::Point2f> pr; // right image coords (pixels) (same ordering)
     std::vector<uint8_t> has_r;  // optional: 1 if pr[i] is valid, else 0
+
+    bool has_imu = false;
+    std::vector<uint8_t> pim_bytes;
 };
 
 // Bias estimate (gyro + accel), units: rad/s and m/s^2

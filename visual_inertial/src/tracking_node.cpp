@@ -165,6 +165,11 @@ public:
                        .durability_volatile();
 
         kf_pub_ = this->create_publisher<visual_inertial::msg::Keyframe>("keyframes", qos);
+
+        imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
+            "/oak/imu/data",
+            rclcpp::SensorDataQoS(),
+            std::bind(&FeatureNode::imuCallback_, this, std::placeholders::_1));
     }
 
 private:
@@ -196,6 +201,14 @@ private:
     std::string parent_frame_;
     std::string child_frame_;
 
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+
+    double last_cam_stamp_s_ = 0.0;
+    bool have_cam_stamp_ = false;
+
+    bool have_imu_offset_ = false;
+    double cam_minus_imu_offset_s_ = 0.0; // t_cam = t_imu + cam_minus_imu_offset_s_
+
     void cb(const sensor_msgs::msg::Image::ConstSharedPtr &left_msg,
             const sensor_msgs::msg::CameraInfo::ConstSharedPtr &left_info,
             const sensor_msgs::msg::Image::ConstSharedPtr &right_msg,
@@ -219,6 +232,9 @@ private:
         // Convert ROS time to double seconds
         const rclcpp::Time ts = left_msg->header.stamp;
         const double t_curr = ts.seconds();
+
+        last_cam_stamp_s_ = t_curr; // seconds (same thing you use for keyframes)
+        have_cam_stamp_ = true;
 
         auto result = visual_inertial_->processStereo(left_cv->image, right_cv->image, t_curr);
 
@@ -303,6 +319,9 @@ private:
                 msg.has_right[i] = result.kf.has_r[i];
             }
 
+            msg.has_imu = result.kf.has_imu ? uint8_t{1} : uint8_t{0};
+            msg.pim_bytes = result.kf.pim_bytes;
+
             kf_pub_->publish(msg);
         }
     }
@@ -336,6 +355,33 @@ private:
         rig.baseline = std::abs(Tx);
 
         return rig;
+    }
+
+    void imuCallback_(const sensor_msgs::msg::Imu::SharedPtr msg)
+    {
+        const double t_imu = rclcpp::Time(msg->header.stamp).seconds();
+
+        if (!have_imu_offset_ && have_cam_stamp_)
+        {
+            cam_minus_imu_offset_s_ = last_cam_stamp_s_ - t_imu;
+            have_imu_offset_ = true;
+            std::cout << std::fixed << std::setprecision(6)
+                      << "[IMU] computed cam_minus_imu_offset_s_=" << cam_minus_imu_offset_s_
+                      << " (cam=" << last_cam_stamp_s_ << " imu=" << t_imu << ")\n";
+        }
+
+        const double t_cam = have_imu_offset_ ? (t_imu + cam_minus_imu_offset_s_) : t_imu;
+
+        ImuSample s;
+        s.t_s = t_cam;
+        s.accel = Eigen::Vector3d(msg->linear_acceleration.x,
+                                  msg->linear_acceleration.y,
+                                  msg->linear_acceleration.z);
+        s.gyro = Eigen::Vector3d(msg->angular_velocity.x,
+                                 msg->angular_velocity.y,
+                                 msg->angular_velocity.z);
+
+        visual_inertial_->processImu(s);
     }
 };
 

@@ -18,6 +18,7 @@ add_library(${PROJECT_NAME} SHARED
   src/tracks_buffer.cpp
   src/odometry.cpp
   src/keyframe_policy.cpp
+  src/preintegrator.cpp 
 )
 
 ament_target_dependencies(${PROJECT_NAME}

@@ -5,6 +5,7 @@
 #include "visual_inertial_frontend/feature_detector.hpp"
 #include "visual_inertial_frontend/types.hpp"
 #include "visual_inertial_frontend/keyframe_policy.hpp"
+#include "visual_inertial_frontend/preintegrator.hpp"
 #include "visual_inertial_common/types.hpp"
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/calib3d.hpp>
@@ -35,6 +36,8 @@ public:
     FrameResult processStereo(const cv::Mat &gray8_left,
                               const cv::Mat &gray8_right, double stamp);
 
+    void processImu(const ImuSample &sample);
+
     void setCalibration(const CameraRig &calibration)
     {
         calibration_ = calibration;
@@ -50,6 +53,7 @@ private:
     FeatureTracker tracker_temporal_;
     FeatureTracker tracker_spatial_;
     KeyframePolicy keyframe_policy_;
+    ImuPreintegrator imu_preint_;
 
     cv::cuda::Stream stream_{};
     cv::cuda::GpuMat d_mask_{}; // mask on device for feature top-up
@@ -60,6 +64,7 @@ private:
     Eigen::Isometry3d vo_pose_abs_ = Eigen::Isometry3d::Identity();
 
     uint64_t next_kf_id_ = 0;
+    uint64_t prev_kf_id_ = 0;
 
     double timestamp_last_kf_ = 0.0;
     

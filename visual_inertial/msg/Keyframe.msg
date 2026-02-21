@@ -27,3 +27,8 @@ uint8[]   has_right
 
 # Optional: why the keyframe was created (bitmask from your policy, 0 if unused)
 uint32 kf_reason_mask
+
+# IMU preintegration payload (boost-serialized GTSAM PreintegratedCombinedMeasurements)
+uint8[] pim_bytes
+uint8 has_imu
+

@@ -37,7 +37,8 @@ VisualInertial::VisualInertial(const Params &p)
     : params_(p),
       feature_detector_(FeatureDetector::Params{}, &stream_),
       tracker_temporal_(&stream_),
-      tracker_spatial_(&stream_)
+      tracker_spatial_(&stream_),
+      imu_preint_()
 {
 }
 
@@ -56,6 +57,12 @@ static inline cv::Mat buildExclusionMask(const cv::Size &sz,
         cv::circle(mask, p, radius_px, cv::Scalar(0), -1, cv::LINE_AA);
     }
     return mask;
+}
+
+void VisualInertial::processImu(const ImuSample &sample)
+{
+    imu_preint_.push(sample.t_s, sample.accel, sample.gyro);
+    return;
 }
 
 FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
@@ -344,16 +351,48 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         ev.ids = tracks_buffer_.ids();
         ev.pl = tracks_buffer_.pl();
         ev.pr = tracks_buffer_.pr();
-        ev.has_r = tracks_buffer_.hasRight();   // or whatever you name it
-
+        ev.has_r = tracks_buffer_.hasRight(); // or whatever you name it
 
         // 4) Inform policy that the keyframe was accepted/created
         //    (policy stores last-kf pose/time + last-kf ids for overlap logic)
         keyframe_policy_.onKeyframeCreated(ev.kf_id, ev.t_end, ev.T_WC, ev.ids);
         output.kf_valid = true;
+
+        // Right before buildAndConsume(...)
+        std::cout << std::fixed << std::setprecision(6)
+            << "[KF/IMU] t0=" << ev.t_start
+            << " t1=" << ev.t_end
+            << " imu_size=" << imu_preint_.size()
+            << " imu_old=" << imu_preint_.oldestTime()
+            << " imu_new=" << imu_preint_.newestTime()
+            << " hasCoverage=" << (imu_preint_.hasCoverage(ev.t_end) ? 1 : 0)
+            << std::endl;
+
+        if (!(ev.t_end > ev.t_start))
+        {
+            std::cout << "[KF/IMU] BAD INTERVAL: t0 >= t1" << std::endl;
+        }
+        // Build + consume IMU preintegration for (t0, t1]
+        auto pkt_opt = imu_preint_.buildAndConsume(prev_kf_id_, ev.t_start, ev.kf_id, ev.t_end);
+
+        if (!pkt_opt || !pkt_opt->valid)
+        {
+            std::cout << "aaa" << std::endl;
+            // MVP behavior: still publish KF but mark IMU invalid / empty.
+            // You can also choose to skip KF emission if you want.
+            ev.pim_bytes.clear();
+            ev.has_imu = false;
+        }
+        else
+        {
+            ev.pim_bytes = pkt_opt->bytes; // or pkt_opt->pim_bytes depending on your struct
+            ev.has_imu = true;
+        }
+
         output.kf = ev;
 
         timestamp_last_kf_ = stamp; // update last stamp
+        prev_kf_id_ = ev.kf_id;
     }
 
     // debug
