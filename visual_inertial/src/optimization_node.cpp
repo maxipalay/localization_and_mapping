@@ -67,9 +67,9 @@ namespace
     {
         KeyframeEvent ev;
         ev.kf_id = msg.kf_id;
-        ev.t_start = msg.t_start; //rclcpp::Time(msg.header.stamp).seconds();
+        ev.t_start = msg.t_start; // rclcpp::Time(msg.header.stamp).seconds();
         ev.t_end = msg.t_end;
-        
+
         // Frontend pose: World(odom) <- Camera(LEFT optical)
         ev.T_WC = poseMsgToIso(msg.pose_wc);
 
@@ -97,6 +97,9 @@ namespace
             ev.pr[i] = cv::Point2f(msg.u_r[i], msg.v_r[i]);
             ev.has_r[i] = msg.has_right[i];
         }
+
+        ev.has_imu = (msg.has_imu != 0);
+        ev.pim_bytes = msg.pim_bytes; // uint8[] -> std::vector<uint8_t>
 
         return ev;
     }
@@ -329,7 +332,10 @@ private:
             // Update cached map->odom correction (timer will broadcast it at constant rate)
             const Eigen::Isometry3d T_odom_C = poseMsgToIso(msg.pose_wc);
             const Eigen::Isometry3d T_map_C = res->T_WC_opt;
-            const Eigen::Isometry3d T_map_odom = T_map_C * T_odom_C.inverse();
+            const Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_wc); // now odom<-body
+            const Eigen::Isometry3d T_map_B = res->T_WB_opt;
+
+            const Eigen::Isometry3d T_map_odom = T_map_B * T_odom_B.inverse();
 
             {
                 std::lock_guard<std::mutex> lk(tf_mtx_);

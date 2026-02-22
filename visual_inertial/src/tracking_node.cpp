@@ -1,3 +1,6 @@
+// I might want to push this extra kf finalization work out of the node
+// feels like VisualInertial should expose an easier way to do this
+
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -441,10 +444,10 @@ private:
         msg.t_start = ev.t_start;
         msg.t_end = ev.t_end;
 
-        msg.pose_wc.position.x = ev.T_WC.translation().x();
-        msg.pose_wc.position.y = ev.T_WC.translation().y();
-        msg.pose_wc.position.z = ev.T_WC.translation().z();
-        Eigen::Quaterniond q(ev.T_WC.rotation());
+        msg.pose_wc.position.x = poseOpticalToRos(ev.T_WC).translation().x();
+        msg.pose_wc.position.y = poseOpticalToRos(ev.T_WC).translation().y();
+        msg.pose_wc.position.z = poseOpticalToRos(ev.T_WC).translation().z();
+        Eigen::Quaterniond q(poseOpticalToRos(ev.T_WC).rotation());
         msg.pose_wc.orientation.w = q.w();
         msg.pose_wc.orientation.x = q.x();
         msg.pose_wc.orientation.y = q.y();

@@ -11,6 +11,7 @@ find_package(eigen3_cmake_module REQUIRED)
 find_package(OpenCV REQUIRED)  # your OpenCV was already built with CUDA
 find_package(GTSAM REQUIRED)
 find_package(visual_inertial_common REQUIRED)
+find_package(Boost REQUIRED COMPONENTS serialization)
 
 add_library(${PROJECT_NAME} SHARED
   src/optimization.cpp
@@ -33,6 +34,7 @@ target_link_libraries(${PROJECT_NAME}
   gtsam
   gtsam_unstable
   visual_inertial_common::visual_inertial_common
+  Boost::serialization
 )
 
 # -------- Install targets + export set (names MUST match) --------
@@ -56,6 +58,6 @@ install(
 # Ament exports
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)   # <- same export set
 ament_export_include_directories(include ${_gtsam_eigen})
-ament_export_dependencies(OpenCV sensor_msgs)
+ament_export_dependencies(OpenCV sensor_msgs Boost)
 
 ament_package()

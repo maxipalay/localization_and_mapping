@@ -7,6 +7,10 @@
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <build_export_depend>boost</build_export_depend>
+  <exec_depend>boost</exec_depend>
+
   <depend>opencv</depend>
   <depend>visual_inertial_common</depend>
 
