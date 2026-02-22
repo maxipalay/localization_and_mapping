@@ -23,8 +23,6 @@
 #include <cmath>
 #include <Eigen/Geometry>
 
-#include <Eigen/Geometry>
-
 // Converts an SE(3) transform expressed in an "optical" frame to a ROS-style frame,
 // preserving the same similarity transform you used:
 //   R_out = R_ros_opt * R_in * R_opt_ros
@@ -170,6 +168,10 @@ public:
             "/oak/imu/data",
             rclcpp::SensorDataQoS(),
             std::bind(&FeatureNode::imuCallback_, this, std::placeholders::_1));
+
+        stop_.store(false);
+        kf_worker_ = std::thread([this]()
+                                 { this->kfWorkerLoop_(); });
     }
 
 private:
@@ -208,6 +210,19 @@ private:
 
     bool have_imu_offset_ = false;
     double cam_minus_imu_offset_s_ = 0.0; // t_cam = t_imu + cam_minus_imu_offset_s_
+
+    // pending keyframes waiting for IMU preintegration
+    std::mutex kf_mtx_;
+    std::condition_variable kf_cv_;
+    std::deque<KeyframeEvent> pending_kfs_;
+
+    std::thread kf_worker_;
+    std::atomic<bool> stop_{false};
+
+    // book-keeping for the IMU edge
+    bool have_last_finalized_ = false;
+    uint64_t last_finalized_kf_id_ = 0;
+    double last_finalized_t_end_ = 0.0;
 
     void cb(const sensor_msgs::msg::Image::ConstSharedPtr &left_msg,
             const sensor_msgs::msg::CameraInfo::ConstSharedPtr &left_info,
@@ -285,45 +300,178 @@ private:
 
         if (result.kf_valid)
         {
-            visual_inertial::msg::Keyframe msg;
-            msg.header.stamp = left_msg->header.stamp; // or rclcpp::Clock().now()
-            msg.header.frame_id = "world";             // set your world frame
-            msg.kf_id = result.kf.kf_id;
-            msg.t_start = result.kf.t_start;
-            msg.t_end = result.kf.t_end;
-
-            msg.pose_wc.position.x = result.kf.T_WC.translation().x();
-            msg.pose_wc.position.y = result.kf.T_WC.translation().y();
-            msg.pose_wc.position.z = result.kf.T_WC.translation().z();
-            Eigen::Quaterniond q(result.kf.T_WC.rotation());
-            msg.pose_wc.orientation.w = q.w();
-            msg.pose_wc.orientation.x = q.x();
-            msg.pose_wc.orientation.y = q.y();
-            msg.pose_wc.orientation.z = q.z();
-
-            const auto N = result.kf.ids.size();
-            msg.track_ids.resize(N);
-            msg.u_l.resize(N);
-            msg.v_l.resize(N);
-            msg.u_r.resize(N);
-            msg.v_r.resize(N);
-            msg.has_right.resize(N);
-
-            for (size_t i = 0; i < N; ++i)
+            // If keyframe produced, enqueue for IMU finalization (do NOT publish here)
             {
-                msg.track_ids[i] = result.kf.ids[i];
-                msg.u_l[i] = result.kf.pl[i].x;
-                msg.v_l[i] = result.kf.pl[i].y;
-                msg.u_r[i] = result.kf.pr[i].x;
-                msg.v_r[i] = result.kf.pr[i].y;
-                msg.has_right[i] = result.kf.has_r[i];
+                std::lock_guard<std::mutex> lk(kf_mtx_);
+                pending_kfs_.push_back(std::move(result.kf));
+            }
+            kf_cv_.notify_one();
+
+            // visual_inertial::msg::Keyframe msg;
+            // msg.header.stamp = left_msg->header.stamp; // or rclcpp::Clock().now()
+            // msg.header.frame_id = "world";             // set your world frame
+            // msg.kf_id = result.kf.kf_id;
+            // msg.t_start = result.kf.t_start;
+            // msg.t_end = result.kf.t_end;
+
+            // msg.pose_wc.position.x = result.kf.T_WC.translation().x();
+            // msg.pose_wc.position.y = result.kf.T_WC.translation().y();
+            // msg.pose_wc.position.z = result.kf.T_WC.translation().z();
+            // Eigen::Quaterniond q(result.kf.T_WC.rotation());
+            // msg.pose_wc.orientation.w = q.w();
+            // msg.pose_wc.orientation.x = q.x();
+            // msg.pose_wc.orientation.y = q.y();
+            // msg.pose_wc.orientation.z = q.z();
+
+            // const auto N = result.kf.ids.size();
+            // msg.track_ids.resize(N);
+            // msg.u_l.resize(N);
+            // msg.v_l.resize(N);
+            // msg.u_r.resize(N);
+            // msg.v_r.resize(N);
+            // msg.has_right.resize(N);
+
+            // for (size_t i = 0; i < N; ++i)
+            // {
+            //     msg.track_ids[i] = result.kf.ids[i];
+            //     msg.u_l[i] = result.kf.pl[i].x;
+            //     msg.v_l[i] = result.kf.pl[i].y;
+            //     msg.u_r[i] = result.kf.pr[i].x;
+            //     msg.v_r[i] = result.kf.pr[i].y;
+            //     msg.has_right[i] = result.kf.has_r[i];
+            // }
+
+            // msg.has_imu = result.kf.has_imu ? uint8_t{1} : uint8_t{0};
+            // msg.pim_bytes = result.kf.pim_bytes;
+
+            // kf_pub_->publish(msg);
+        }
+    }
+
+    void kfWorkerLoop_()
+    {
+        while (rclcpp::ok() && !stop_.load())
+        {
+            KeyframeEvent ev;
+
+            // wait for a pending KF
+            {
+                std::unique_lock<std::mutex> lk(kf_mtx_);
+                kf_cv_.wait(lk, [&]
+                            { return stop_.load() || !pending_kfs_.empty(); });
+                if (stop_.load())
+                    break;
+
+                ev = std::move(pending_kfs_.front());
+                pending_kfs_.pop_front();
             }
 
-            msg.has_imu = result.kf.has_imu ? uint8_t{1} : uint8_t{0};
-            msg.pim_bytes = result.kf.pim_bytes;
+            // First KF: publish without IMU (no previous interval)
+            if (!have_last_finalized_)
+            {
+                ev.has_imu = false;
+                ev.pim_bytes.clear();
 
-            kf_pub_->publish(msg);
+                publishKeyframe_(ev); // your existing "struct -> msg -> publish"
+
+                have_last_finalized_ = true;
+                last_finalized_kf_id_ = ev.kf_id;
+                last_finalized_t_end_ = ev.t_end;
+                continue;
+            }
+
+            // Sanity: ensure we are chaining consecutive keyframes
+            const uint64_t prev_id = last_finalized_kf_id_;
+            const double t0 = ev.t_start; // should equal last_finalized_t_end_
+            const double t1 = ev.t_end;
+
+            const bool ids_ok = (ev.kf_id == prev_id + 1);
+            const bool times_ok = (std::abs(t0 - last_finalized_t_end_) < 1e-3) && (t1 > t0);
+
+            if (!ids_ok || !times_ok)
+            {
+                // Don't risk consuming the IMU buffer with the wrong interval.
+                ev.has_imu = false;
+                ev.pim_bytes.clear();
+                publishKeyframe_(ev);
+
+                // Rebase the chain at this KF
+                last_finalized_kf_id_ = ev.kf_id;
+                last_finalized_t_end_ = ev.t_end;
+                continue;
+            }
+
+            // Wait until IMU has coverage up to t1
+            while (!stop_.load() && !visual_inertial_->hasImuCoverage(t1))
+            {
+                std::unique_lock<std::mutex> lk(kf_mtx_);
+                kf_cv_.wait_for(lk, std::chrono::milliseconds(2));
+            }
+            if (stop_.load())
+                break;
+
+            // Build preintegrated bytes (this consumes IMU up to t1 inside the preintegrator)
+            auto pkt = visual_inertial_->buildImuPacket(prev_id, t0, ev.kf_id, t1);
+
+            if (pkt && pkt->valid)
+            {
+                ev.has_imu = true;
+                ev.pim_bytes = std::move(pkt->bytes);
+            }
+            else
+            {
+                ev.has_imu = false;
+                ev.pim_bytes.clear();
+            }
+
+            publishKeyframe_(ev);
+
+            // advance chain
+            last_finalized_kf_id_ = ev.kf_id;
+            last_finalized_t_end_ = ev.t_end;
         }
+    }
+
+    void publishKeyframe_(KeyframeEvent &ev)
+    {
+        visual_inertial::msg::Keyframe msg;
+        msg.header.stamp = rclcpp::Clock().now();
+        msg.header.frame_id = "world"; // set your world frame
+        msg.kf_id = ev.kf_id;
+        msg.t_start = ev.t_start;
+        msg.t_end = ev.t_end;
+
+        msg.pose_wc.position.x = ev.T_WC.translation().x();
+        msg.pose_wc.position.y = ev.T_WC.translation().y();
+        msg.pose_wc.position.z = ev.T_WC.translation().z();
+        Eigen::Quaterniond q(ev.T_WC.rotation());
+        msg.pose_wc.orientation.w = q.w();
+        msg.pose_wc.orientation.x = q.x();
+        msg.pose_wc.orientation.y = q.y();
+        msg.pose_wc.orientation.z = q.z();
+
+        const auto N = ev.ids.size();
+        msg.track_ids.resize(N);
+        msg.u_l.resize(N);
+        msg.v_l.resize(N);
+        msg.u_r.resize(N);
+        msg.v_r.resize(N);
+        msg.has_right.resize(N);
+
+        for (size_t i = 0; i < N; ++i)
+        {
+            msg.track_ids[i] = ev.ids[i];
+            msg.u_l[i] = ev.pl[i].x;
+            msg.v_l[i] = ev.pl[i].y;
+            msg.u_r[i] = ev.pr[i].x;
+            msg.v_r[i] = ev.pr[i].y;
+            msg.has_right[i] = ev.has_r[i];
+        }
+
+        msg.has_imu = ev.has_imu ? uint8_t{1} : uint8_t{0};
+        msg.pim_bytes = ev.pim_bytes;
+
+        kf_pub_->publish(msg);
     }
 
     CameraRig makeStereoModel(
@@ -382,6 +530,9 @@ private:
                                  msg->angular_velocity.z);
 
         visual_inertial_->processImu(s);
+
+        // wake finalizer: new IMU data may satisfy coverage for pending keyframes
+        kf_cv_.notify_one();
     }
 };
 

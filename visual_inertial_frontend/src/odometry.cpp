@@ -372,22 +372,25 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         {
             std::cout << "[KF/IMU] BAD INTERVAL: t0 >= t1" << std::endl;
         }
-        // Build + consume IMU preintegration for (t0, t1]
-        auto pkt_opt = imu_preint_.buildAndConsume(prev_kf_id_, ev.t_start, ev.kf_id, ev.t_end);
 
-        if (!pkt_opt || !pkt_opt->valid)
-        {
-            std::cout << "aaa" << std::endl;
-            // MVP behavior: still publish KF but mark IMU invalid / empty.
-            // You can also choose to skip KF emission if you want.
-            ev.pim_bytes.clear();
-            ev.has_imu = false;
-        }
-        else
-        {
-            ev.pim_bytes = pkt_opt->bytes; // or pkt_opt->pim_bytes depending on your struct
-            ev.has_imu = true;
-        }
+        ev.pim_bytes.clear();
+        ev.has_imu = false;
+        // Build + consume IMU preintegration for (t0, t1]
+        // auto pkt_opt = imu_preint_.buildAndConsume(prev_kf_id_, ev.t_start, ev.kf_id, ev.t_end);
+
+        // if (!pkt_opt || !pkt_opt->valid)
+        // {
+        //     std::cout << "aaa" << std::endl;
+        //     // MVP behavior: still publish KF but mark IMU invalid / empty.
+        //     // You can also choose to skip KF emission if you want.
+        //     ev.pim_bytes.clear();
+        //     ev.has_imu = false;
+        // }
+        // else
+        // {
+        //     ev.pim_bytes = pkt_opt->bytes; // or pkt_opt->pim_bytes depending on your struct
+        //     ev.has_imu = true;
+        // }
 
         output.kf = ev;
 

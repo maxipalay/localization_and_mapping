@@ -189,7 +189,7 @@ std::optional<ImuPreintegrator::Packet> ImuPreintegrator::buildAndConsume(
 
         if (buf_.empty())
             return std::nullopt;
-        if (sample_time(buf_.back()) < t1_s - 0.05)
+        if (sample_time(buf_.back()) < t1_s)
             return std::nullopt; // no coverage yet
 
         bias_hat_local = bias_hat_;

@@ -10,6 +10,7 @@
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/calib3d.hpp>
 #include <iostream>
+#include <optional>
 
 class VisualInertial
 {
@@ -41,6 +42,27 @@ public:
     void setCalibration(const CameraRig &calibration)
     {
         calibration_ = calibration;
+    }
+
+    // Thread-safe IMU helpers for the node's KF-finalizer worker thread.
+    // These MUST NOT touch any VO state; they only forward to imu_preint_ (which has its own mutex).
+    bool hasImuCoverage(double t_s) const
+    {
+        return imu_preint_.hasCoverage(t_s);
+    }
+
+    std::optional<PreintegratedImuPacket> buildImuPacket(uint64_t prev_kf_id,
+                                                         double t0_s,
+                                                         uint64_t kf_id,
+                                                         double t1_s)
+    {
+        return imu_preint_.buildAndConsume(prev_kf_id, t0_s, kf_id, t1_s);
+    }
+
+    // Optional for later: backend bias feedback
+    void setImuBias(const ImuBias& b)
+    {
+        imu_preint_.setBias(b);
     }
 
 private:

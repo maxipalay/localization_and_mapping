@@ -19,7 +19,7 @@ find_package(TBB REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(geometry_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED))
 
 add_executable(tracking_node src/tracking_node.cpp)
 add_executable(optimization_node src/optimization_node.cpp)
