@@ -345,7 +345,12 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         ev.kf_id = next_kf_id_++;
         ev.t_start = timestamp_last_kf_;
         ev.t_end = stamp;
-        ev.T_WC = vo_pose_abs_;
+
+        const Eigen::Isometry3d T_BC = params_.T_BC; ///* your calibrated Body<-CamOptical (rot+trans) */;
+        const Eigen::Isometry3d T_CB = T_BC.inverse();
+
+        ev.T_WC = T_BC * vo_pose_abs_ * T_CB; // <-- STORE World<-Body in the KF (reuse field for now)
+        // v.T_WC = vo_pose_abs_;
 
         // Tracks in deterministic order (same order across ids/pl/pr)
         ev.ids = tracks_buffer_.ids();
@@ -355,18 +360,18 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
         // 4) Inform policy that the keyframe was accepted/created
         //    (policy stores last-kf pose/time + last-kf ids for overlap logic)
-        keyframe_policy_.onKeyframeCreated(ev.kf_id, ev.t_end, ev.T_WC, ev.ids);
+        keyframe_policy_.onKeyframeCreated(ev.kf_id, ev.t_end, vo_pose_abs_, ev.ids);
         output.kf_valid = true;
 
         // Right before buildAndConsume(...)
         std::cout << std::fixed << std::setprecision(6)
-            << "[KF/IMU] t0=" << ev.t_start
-            << " t1=" << ev.t_end
-            << " imu_size=" << imu_preint_.size()
-            << " imu_old=" << imu_preint_.oldestTime()
-            << " imu_new=" << imu_preint_.newestTime()
-            << " hasCoverage=" << (imu_preint_.hasCoverage(ev.t_end) ? 1 : 0)
-            << std::endl;
+                  << "[KF/IMU] t0=" << ev.t_start
+                  << " t1=" << ev.t_end
+                  << " imu_size=" << imu_preint_.size()
+                  << " imu_old=" << imu_preint_.oldestTime()
+                  << " imu_new=" << imu_preint_.newestTime()
+                  << " hasCoverage=" << (imu_preint_.hasCoverage(ev.t_end) ? 1 : 0)
+                  << std::endl;
 
         if (!(ev.t_end > ev.t_start))
         {
@@ -417,7 +422,11 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     }
 
     output.debug_viz = result_left_tracking_after_stereo;
-    output.vo_pose_abs = vo_pose_abs_;
+
+    const Eigen::Isometry3d T_BC = params_.T_BC; ///* your calibrated Body<-CamOptical (rot+trans) */;
+    const Eigen::Isometry3d T_CB = T_BC.inverse();
+
+    output.vo_pose_abs = T_BC * vo_pose_abs_ * T_CB;
 
     ///
     /// SECTION - UPDATE BUFFERS

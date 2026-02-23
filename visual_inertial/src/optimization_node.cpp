@@ -330,12 +330,16 @@ private:
                 continue;
 
             // Update cached map->odom correction (timer will broadcast it at constant rate)
-            const Eigen::Isometry3d T_odom_C = poseMsgToIso(msg.pose_wc);
-            const Eigen::Isometry3d T_map_C = res->T_WC_opt;
-            const Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_wc); // now odom<-body
-            const Eigen::Isometry3d T_map_B = res->T_WB_opt;
+            // const Eigen::Isometry3d T_odom_C = poseMsgToIso(msg.pose_wc);
+            // const Eigen::Isometry3d T_map_C = res->T_WC_opt;
+            // const Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_wc); // now odom<-body
+            // const Eigen::Isometry3d T_map_B = res->T_WB_opt;
 
-            const Eigen::Isometry3d T_map_odom = T_map_B * T_odom_B.inverse();
+            // const Eigen::Isometry3d T_map_odom = T_map_B * T_odom_B.inverse();
+            Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_wc); // odom<-body (from KF msg)
+            Eigen::Isometry3d T_map_B = res->T_WB_opt;              // map<-body (optimizer)
+
+            Eigen::Isometry3d T_map_odom = T_map_B * T_odom_B.inverse();
 
             {
                 std::lock_guard<std::mutex> lk(tf_mtx_);

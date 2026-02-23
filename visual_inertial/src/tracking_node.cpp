@@ -26,30 +26,6 @@
 #include <cmath>
 #include <Eigen/Geometry>
 
-// Converts an SE(3) transform expressed in an "optical" frame to a ROS-style frame,
-// preserving the same similarity transform you used:
-//   R_out = R_ros_opt * R_in * R_opt_ros
-//   t_out = R_ros_opt * t_in
-//
-// Convention: T maps points as p_out = T * p_in (i.e., "destination <- source").
-// This applies a fixed change-of-basis on both rotation and translation.
-inline Eigen::Isometry3d poseOpticalToRos(const Eigen::Isometry3d &T_in)
-{
-    // Same matrix as your cv::Matx33d
-    static const Eigen::Matrix3d R_ros_opt =
-        (Eigen::Matrix3d() << 0.0, 0.0, 1.0,
-         -1.0, 0.0, 0.0,
-         0.0, -1.0, 0.0)
-            .finished();
-
-    const Eigen::Matrix3d R_opt_ros = R_ros_opt.transpose();
-
-    Eigen::Isometry3d T_out = Eigen::Isometry3d::Identity();
-    T_out.linear() = R_ros_opt * T_in.linear() * R_opt_ros;
-    T_out.translation() = R_ros_opt * T_in.translation();
-    return T_out;
-}
-
 static inline geometry_msgs::msg::Quaternion R_to_quat(const cv::Matx33d &R)
 {
     geometry_msgs::msg::Quaternion q;
@@ -266,7 +242,7 @@ private:
         tf_msg.header.stamp = left_msg->header.stamp;
         tf_msg.header.frame_id = parent_frame_;
         tf_msg.child_frame_id = child_frame_;
-        const auto &T = poseOpticalToRos(result.vo_pose_abs);
+        const auto &T = result.vo_pose_abs;
         Eigen::Vector3d t = T.translation();
         Eigen::Quaterniond q(T.rotation());
         tf_msg.transform.translation.x = t.x();
@@ -281,7 +257,7 @@ private:
         tf_msg.header.stamp = left_msg->header.stamp;
         tf_msg.header.frame_id = parent_frame_;
         tf_msg.child_frame_id = "rel";
-        const auto &T2 = poseOpticalToRos(result.vo_pose_rel);
+        const auto &T2 = result.vo_pose_rel;
         t = T2.translation();
         q = Eigen::Quaterniond(T2.rotation());
         tf_msg.transform.translation.x = t.x();
@@ -444,10 +420,10 @@ private:
         msg.t_start = ev.t_start;
         msg.t_end = ev.t_end;
 
-        msg.pose_wc.position.x = poseOpticalToRos(ev.T_WC).translation().x();
-        msg.pose_wc.position.y = poseOpticalToRos(ev.T_WC).translation().y();
-        msg.pose_wc.position.z = poseOpticalToRos(ev.T_WC).translation().z();
-        Eigen::Quaterniond q(poseOpticalToRos(ev.T_WC).rotation());
+        msg.pose_wc.position.x = ev.T_WC.translation().x();
+        msg.pose_wc.position.y = ev.T_WC.translation().y();
+        msg.pose_wc.position.z = ev.T_WC.translation().z();
+        Eigen::Quaterniond q(ev.T_WC.rotation());
         msg.pose_wc.orientation.w = q.w();
         msg.pose_wc.orientation.x = q.x();
         msg.pose_wc.orientation.y = q.y();

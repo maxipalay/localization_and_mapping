@@ -23,6 +23,17 @@ public:
         float stereo_disp_max = 255.0;
         float fb_thr2 = 1.5 * 1.5;
 
+        static Eigen::Isometry3d default_T_BC()
+        {
+            Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+            T.linear() << 0.0, 0.0, 1.0,
+                -1.0, 0.0, 0.0,
+                0.0, -1.0, 0.0;
+            T.translation() = Eigen::Vector3d(0.0, 0.05, 0.0);
+            return T;
+        }
+
+        Eigen::Isometry3d T_BC = default_T_BC();
     };
 
     VisualInertial()
@@ -31,8 +42,6 @@ public:
     }
 
     VisualInertial(const Params &p);
-
-    
 
     FrameResult processStereo(const cv::Mat &gray8_left,
                               const cv::Mat &gray8_right, double stamp);
@@ -60,7 +69,7 @@ public:
     }
 
     // Optional for later: backend bias feedback
-    void setImuBias(const ImuBias& b)
+    void setImuBias(const ImuBias &b)
     {
         imu_preint_.setBias(b);
     }
@@ -89,5 +98,4 @@ private:
     uint64_t prev_kf_id_ = 0;
 
     double timestamp_last_kf_ = 0.0;
-    
 };

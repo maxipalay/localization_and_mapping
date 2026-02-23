@@ -250,7 +250,7 @@ struct OptimizationConfig
         T.linear() << 0.0, 0.0, 1.0,
             -1.0, 0.0, 0.0,
             0.0, -1.0, 0.0;
-        T.translation() = Eigen::Vector3d(0.0, 0.072, 0.0);
+        T.translation() = Eigen::Vector3d(0.0, 0.05, 0.0);
         return T;
     }
 
