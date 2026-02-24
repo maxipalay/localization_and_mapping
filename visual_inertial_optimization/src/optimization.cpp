@@ -281,7 +281,7 @@ std::optional<OptimizationResult> Optimizer::push(
   // T_WC = T_WB * T_BC  =>  T_WB = T_WC * T_CB
   // const Eigen::Isometry3d T_CB = cfg_.T_BC.inverse();
   // const Eigen::Isometry3d T_WB_init = kf.T_WC * T_CB;
-  const Eigen::Isometry3d T_WB_init = kf.T_WC;  // now this field carries odom<-body
+  const Eigen::Isometry3d T_WB_init = kf.T_WC; // now this field carries odom<-body
 
   // Optional bookkeeping prune (count-based window)
   if (cfg_.prune_unobserved_landmarks && cfg_.window_size > 0)
@@ -370,7 +370,7 @@ std::optional<OptimizationResult> Optimizer::push(
   if (cfg_.use_vo_between && initialized_ && T_Ck_Ckm1.has_value())
   {
     const gtsam::Key xkm1 = X_(last_kf_id_);
-    
+
     const Eigen::Isometry3d T_Bk_Bkm1 = *T_Ck_Ckm1;
 
     // BetweenFactor expects measurement = (Bkm1 <- Bk)
@@ -489,6 +489,30 @@ std::optional<OptimizationResult> Optimizer::push(
   {
     std::cout << "[Optimizer] calculateEstimate unknown exception\n";
     return std::nullopt;
+  }
+
+  // After update() succeeds and you have xk, vk, bk keys:
+  try
+  {
+    const gtsam::imuBias::ConstantBias b_k =
+        smoother_.calculateEstimate<gtsam::imuBias::ConstantBias>(B_(kf.kf_id));
+
+    // Fill your OptimizationResult (assuming you add these fields)
+    out.bias_opt.accel = Eigen::Vector3d(b_k.accelerometer().x(),
+                                         b_k.accelerometer().y(),
+                                         b_k.accelerometer().z());
+    out.bias_opt.gyro = Eigen::Vector3d(b_k.gyroscope().x(),
+                                        b_k.gyroscope().y(),
+                                        b_k.gyroscope().z());
+  }
+  catch (const std::exception &e)
+  {
+    std::cout << "[Optimizer] Failed to read bias estimate: " << e.what() << std::endl;
+    // leave bias as default / zero
+  }
+  catch (...)
+  {
+    std::cout << "[Optimizer] Failed to read bias estimate (unknown)\n";
   }
 
   out.stats.num_keyframes_in_window = static_cast<int>(cfg_.window_size);

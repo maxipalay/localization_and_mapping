@@ -30,5 +30,7 @@ struct OptimizationResult {
   Eigen::Isometry3d T_WB_opt = Eigen::Isometry3d::Identity();
 
   OptimizationStats stats;
+
+  ImuBias bias_opt;              // accel+gyro
 };
 

@@ -26,6 +26,8 @@
 #include <cmath>
 #include <Eigen/Geometry>
 
+#include "visual_inertial/msg/imu_bias.hpp"
+
 static inline geometry_msgs::msg::Quaternion R_to_quat(const cv::Matx33d &R)
 {
     geometry_msgs::msg::Quaternion q;
@@ -151,6 +153,13 @@ public:
         stop_.store(false);
         kf_worker_ = std::thread([this]()
                                  { this->kfWorkerLoop_(); });
+
+        // bias subscription
+        auto bias_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
+
+        bias_sub_ = this->create_subscription<visual_inertial::msg::ImuBias>(
+            "imu_bias", bias_qos,
+            std::bind(&FeatureNode::biasCallback_, this, std::placeholders::_1));
     }
 
 private:
@@ -202,6 +211,31 @@ private:
     bool have_last_finalized_ = false;
     uint64_t last_finalized_kf_id_ = 0;
     double last_finalized_t_end_ = 0.0;
+
+    // bias updates
+    rclcpp::Subscription<visual_inertial::msg::ImuBias>::SharedPtr bias_sub_;
+    std::atomic<uint64_t> last_bias_kf_id_{0}; // ignore old bias updates
+
+    void biasCallback_(const visual_inertial::msg::ImuBias::SharedPtr msg)
+    {
+        // Optional: only accept monotonic keyframe bias updates
+        const uint64_t kf_id = msg->kf_id;
+        const uint64_t prev = last_bias_kf_id_.load(std::memory_order_relaxed);
+        if (kf_id <= prev)
+            return;
+        last_bias_kf_id_.store(kf_id, std::memory_order_relaxed);
+
+        ImuBias b;
+        b.accel = Eigen::Vector3d(msg->accel_bias.x, msg->accel_bias.y, msg->accel_bias.z);
+        b.gyro = Eigen::Vector3d(msg->gyro_bias.x, msg->gyro_bias.y, msg->gyro_bias.z);
+
+        visual_inertial_->setImuBias(b);
+
+        // (Optional) light debug
+        // std::cout << "[BIAS] kf_id=" << kf_id
+        //           << " accel=" << b.accel.transpose()
+        //           << " gyro=" << b.gyro.transpose() << "\n";
+    }
 
     void cb(const sensor_msgs::msg::Image::ConstSharedPtr &left_msg,
             const sensor_msgs::msg::CameraInfo::ConstSharedPtr &left_info,

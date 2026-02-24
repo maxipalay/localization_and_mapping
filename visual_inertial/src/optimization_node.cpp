@@ -25,6 +25,9 @@
 #include <algorithm>
 #include <chrono>
 
+#include <visual_inertial/msg/imu_bias.hpp>
+#include <geometry_msgs/msg/vector3.hpp>
+
 namespace
 {
 
@@ -241,6 +244,10 @@ public:
                     "Optimization node started. KF=%s L_info=%s R_info=%s TF=%s->%s @ %.1f Hz",
                     keyframe_topic_.c_str(), left_info_topic_.c_str(), right_info_topic_.c_str(),
                     map_frame_id_.c_str(), odom_frame_id_.c_str(), tf_pub_rate_hz_);
+
+        // publisher for imu bias
+        auto bias_qos = rclcpp::QoS(rclcpp::KeepLast(2)).reliable().durability_volatile();
+        bias_pub_ = this->create_publisher<visual_inertial::msg::ImuBias>("imu_bias", bias_qos);
     }
 
     ~OptimizationNode() override
@@ -329,6 +336,22 @@ private:
             if (!res)
                 continue;
 
+            // publishing imu bias
+            visual_inertial::msg::ImuBias bmsg;
+            bmsg.header.stamp = msg.header.stamp; // same stamp as keyframe
+            bmsg.header.frame_id = "base_link";   // or your body frame name
+            bmsg.kf_id = res->kf_id;
+
+            bmsg.accel_bias.x = res->bias_opt.accel.x();
+            bmsg.accel_bias.y = res->bias_opt.accel.y();
+            bmsg.accel_bias.z = res->bias_opt.accel.z();
+
+            bmsg.gyro_bias.x = res->bias_opt.gyro.x();
+            bmsg.gyro_bias.y = res->bias_opt.gyro.y();
+            bmsg.gyro_bias.z = res->bias_opt.gyro.z();
+
+            bias_pub_->publish(bmsg);
+
             // Update cached map->odom correction (timer will broadcast it at constant rate)
             // const Eigen::Isometry3d T_odom_C = poseMsgToIso(msg.pose_wc);
             // const Eigen::Isometry3d T_map_C = res->T_WC_opt;
@@ -392,6 +415,9 @@ private:
 
     std::thread worker_;
     std::atomic<bool> stop_{false};
+
+    // publisher for imu bias
+    rclcpp::Publisher<visual_inertial::msg::ImuBias>::SharedPtr bias_pub_;
 };
 
 int main(int argc, char **argv)

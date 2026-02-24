@@ -48,6 +48,7 @@ install(TARGETS tracking_node optimization_node
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Keyframe.msg"
+  "msg/ImuBias.msg"
   DEPENDENCIES builtin_interfaces sensor_msgs geometry_msgs
 )
 

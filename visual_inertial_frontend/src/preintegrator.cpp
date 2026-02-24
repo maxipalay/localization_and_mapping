@@ -22,6 +22,9 @@
 #include <gtsam/base/Matrix.h>                  // I_3x3, I_6x6
 #include <gtsam/geometry/Pose3.h>
 
+#include <iostream>
+#include <iomanip>
+
 namespace
 {
 
@@ -53,7 +56,6 @@ namespace
 
         p->setBiasAccCovariance(accb2 * gtsam::I_3x3);
         p->setBiasOmegaCovariance(gyrb2 * gtsam::I_3x3);
-        p->setBiasAccOmegaInit(gtsam::I_6x6 * 0.0);
 
         // Simplest assumption: measurements are already in the body frame.
         p->setBodyPSensor(gtsam::Pose3::Identity());
@@ -147,6 +149,17 @@ void ImuPreintegrator::setBias(const ImuBias &bias)
 {
     std::lock_guard<std::mutex> lk(mtx_);
     bias_hat_ = bias;
+
+    // Debug print
+    // std::cout << std::fixed << std::setprecision(6)
+    //           << "[preint] new bias accel=("
+    //           << bias_hat_.accel.x() << ", "
+    //           << bias_hat_.accel.y() << ", "
+    //           << bias_hat_.accel.z() << ") gyro=("
+    //           << bias_hat_.gyro.x() << ", "
+    //           << bias_hat_.gyro.y() << ", "
+    //           << bias_hat_.gyro.z() << ")\n"
+    //           << std::endl;
 }
 
 ImuBias ImuPreintegrator::bias() const
