@@ -24,13 +24,17 @@ find_package(Boost REQUIRED COMPONENTS serialization)
 
 add_executable(tracking_node src/tracking_node.cpp)
 add_executable(optimization_node src/optimization_node.cpp)
+add_executable(path_viz_node src/path_viz_node.cpp)
 
 # Pull include dirs/defs from deps (including your lib)
 ament_target_dependencies(tracking_node
   rclcpp sensor_msgs cv_bridge image_transport OpenCV visual_inertial_frontend visual_inertial_common tf2_ros)
 
-  ament_target_dependencies(optimization_node
+ament_target_dependencies(optimization_node
   rclcpp sensor_msgs visual_inertial_common visual_inertial_optimization tf2_ros)
+
+ament_target_dependencies(path_viz_node
+  rclcpp nav_msgs geometry_msgs tf2 tf2_ros)
 
 target_link_libraries(tracking_node
   visual_inertial_frontend::visual_inertial_frontend
@@ -43,7 +47,7 @@ target_link_libraries(optimization_node
   TBB::tbb
 )
 
-install(TARGETS tracking_node optimization_node
+install(TARGETS tracking_node optimization_node path_viz_node
   RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 rosidl_generate_interfaces(${PROJECT_NAME}
