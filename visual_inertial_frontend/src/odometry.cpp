@@ -158,7 +158,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         float dy_epi = std::fabs(pts_fw_stereo[i].y - tracks_buffer_.pl()[i].y); // epipolar line ~ horizontal
         float disp = tracks_buffer_.pl()[i].x - pts_fw_stereo[i].x;              // positive disparity expected
 
-        keep_stereo[i] = (status_fw[i] != 0 && status_bw[i] != 0 && dx * dx + dy * dy < params_.fb_thr2 && dy_epi < params_.stereo_epi_eps_y && disp > params_.stereo_disp_min && disp <= params_.stereo_disp_max) ? 1 : 0;
+        keep_stereo[i] = (status_fw_stereo[i] != 0 && status_bw_stereo[i] != 0 && dx * dx + dy * dy < params_.fb_thr2 && dy_epi < params_.stereo_epi_eps_y && disp > params_.stereo_disp_min && disp <= params_.stereo_disp_max) ? 1 : 0;
         if (!keep_stereo[i])
             stereo_dropped++;
     }
@@ -311,9 +311,10 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     d_mask_.upload(cpu_mask);
 
     std::vector<cv::Point2f> new_pts;
-    uint16_t need = params_.target_features - tracks_buffer_.size();
-    if (need < 0)
-        need = 0;
+    int need_i = (int)params_.target_features - (int)tracks_buffer_.size();
+    if (need_i < 0)
+        need_i = 0;
+    uint16_t need = (uint16_t)need_i;
 
     new_pts.reserve(need);
     // std::cout << "need new features: " << need << std::endl;
