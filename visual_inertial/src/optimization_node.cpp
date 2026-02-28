@@ -183,20 +183,10 @@ public:
                                 ? std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(1.0 / tf_pub_rate_hz_))
                                 : 33ms;
 
-        tf_timer_ = create_wall_timer(period, [this]()
-                                      {
-      if (!have_map_odom_.load()) return;
-
-      Eigen::Isometry3d T_map_odom;
-      {
-        std::lock_guard<std::mutex> lk(tf_mtx_);
-        T_map_odom = last_T_map_odom_;
-      }
-
-      // Stamp with "now" so TF consumers always have a fresh transform.
-      // Works with /use_sim_time too (node clock).
-      const auto tf = isoToTf(T_map_odom, this->now(), map_frame_id_, odom_frame_id_);
-      tf_broadcaster_->sendTransform(tf); });
+        tf_timer_ = this->create_wall_timer(
+            std::chrono::duration<double>(1.0 / tf_pub_rate_hz_),
+            [this]()
+            { this->publishFilteredTf_(); });
 
         // -------- QoS --------
         auto kf_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
@@ -366,10 +356,64 @@ private:
 
             {
                 std::lock_guard<std::mutex> lk(tf_mtx_);
-                last_T_map_odom_ = T_map_odom;
+                T_map_odom_target_ = T_map_odom;
+                have_target_ = true;
+
+                if (!have_filt_)
+                {
+                    T_map_odom_filt_ = T_map_odom_target_;
+                    have_filt_ = true;
+                    last_filt_update_ = this->now();
+                }
             }
+
             have_map_odom_.store(true);
         }
+    }
+
+    void publishFilteredTf_()
+    {
+        Eigen::Isometry3d T_target;
+        Eigen::Isometry3d T_filt;
+        rclcpp::Time now = this->now();
+
+        {
+            std::lock_guard<std::mutex> lk(tf_mtx_);
+            if (!have_target_ || !have_filt_)
+                return;
+
+            // compute alpha from dt and time constant
+            double dt = (now - last_filt_update_).seconds();
+            if (dt <= 0.0)
+                dt = 1.0 / publish_tf_hz_;
+            last_filt_update_ = now;
+
+            double alpha = dt / (smooth_tau_s_ + dt); // EMA equivalent
+            if (alpha < 0.0)
+                alpha = 0.0;
+            if (alpha > 1.0)
+                alpha = 1.0;
+
+            // --- translation EMA ---
+            T_map_odom_filt_.translation() =
+                (1.0 - alpha) * T_map_odom_filt_.translation() +
+                alpha * T_map_odom_target_.translation();
+
+            // --- rotation slerp ---
+            Eigen::Quaterniond q_old(T_map_odom_filt_.linear());
+            Eigen::Quaterniond q_new(T_map_odom_target_.linear());
+            q_old.normalize();
+            q_new.normalize();
+            Eigen::Quaterniond q_f = q_old.slerp(alpha, q_new);
+            q_f.normalize();
+            T_map_odom_filt_.linear() = q_f.toRotationMatrix();
+
+            T_filt = T_map_odom_filt_;
+        }
+
+        // publish TF outside the lock
+        auto tf = isoToTf(T_filt, now, map_frame_id_, odom_frame_id_);
+        tf_broadcaster_->sendTransform(tf);
     }
 
 private:
@@ -393,7 +437,6 @@ private:
 
     // Latest map->odom cached transform
     std::mutex tf_mtx_;
-    Eigen::Isometry3d last_T_map_odom_ = Eigen::Isometry3d::Identity();
     std::atomic<bool> have_map_odom_{false};
 
     // Calibration state
@@ -418,6 +461,17 @@ private:
 
     // publisher for imu bias
     rclcpp::Publisher<visual_inertial::msg::ImuBias>::SharedPtr bias_pub_;
+
+    // smoother for t map odom
+    Eigen::Isometry3d T_map_odom_target_ = Eigen::Isometry3d::Identity();
+    Eigen::Isometry3d T_map_odom_filt_ = Eigen::Isometry3d::Identity();
+    bool have_target_ = false;
+    bool have_filt_ = false;
+
+    double smooth_tau_s_ = 0.5; // time constant (tune 0.2..2.0)
+    double publish_tf_hz_ = 30.0;
+
+    rclcpp::Time last_filt_update_;
 };
 
 int main(int argc, char **argv)
