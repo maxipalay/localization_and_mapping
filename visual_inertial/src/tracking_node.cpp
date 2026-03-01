@@ -10,6 +10,10 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
 
+#include <sstream>
+#include <iomanip>
+#include <limits>
+
 #include "visual_inertial_frontend/types.hpp"
 #include "visual_inertial_frontend/odometry.hpp"
 
@@ -17,7 +21,7 @@
 #include <std_msgs/msg/header.hpp>
 
 #include <image_transport/subscriber_filter.hpp>
-#include <message_filters/sync_policies/exact_time.h>
+#include <message_filters/sync_policies/approximate_time.h>
 #include <message_filters/synchronizer.h>
 #include <message_filters/subscriber.h>
 #include <tf2_ros/transform_broadcaster.h>
@@ -106,8 +110,11 @@ public:
 
         int queue = declare_parameter<int>("queue_size", 3);
 
-        // Publishers
+        // NEW: approximate sync tuning
+        double stereo_slop_s = declare_parameter<double>("stereo_slop_s", 0.01); // 10ms default
+        double age_penalty = declare_parameter<double>("age_penalty", 0.0);      // 0 = prefer closest stamps
 
+        // Publishers
         it_pub_ = image_transport::create_publisher(
             this, output_topic_, rmw_qos_profile_sensor_data);
 
@@ -127,17 +134,27 @@ public:
         sub_left_info_.subscribe(this, left_info_t, rmw_qos_profile_sensor_data);
         sub_right_info_.subscribe(this, right_info_t, rmw_qos_profile_sensor_data);
 
-        using SyncPolicy = message_filters::sync_policies::ExactTime<
+        // CHANGE: ExactTime -> ApproximateTime (4-way)
+        using SyncPolicy = message_filters::sync_policies::ApproximateTime<
             sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo,
             sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo>;
+
         sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(
             SyncPolicy(queue), sub_left_, sub_left_info_, sub_right_, sub_right_info_);
+
+        // Apply slop/penalty on the policy
+        auto policy = sync_->getPolicy(); // NOTE: returns a pointer in your Jazzy build
+        policy->setMaxIntervalDuration(rclcpp::Duration::from_seconds(stereo_slop_s));
+        policy->setAgePenalty(age_penalty);
+
         sync_->registerCallback(std::bind(&FeatureNode::cb, this,
                                           std::placeholders::_1, std::placeholders::_2,
                                           std::placeholders::_3, std::placeholders::_4));
 
-        RCLCPP_INFO(get_logger(), "Stereo: L='%s' R='%s' transport='%s'",
-                    input_topic_left_.c_str(), input_topic_right_.c_str(), transport_.c_str());
+        RCLCPP_INFO(get_logger(),
+                    "Stereo: L='%s' R='%s' transport='%s' approx: queue=%d slop=%.3fms age_penalty=%.3f",
+                    input_topic_left_.c_str(), input_topic_right_.c_str(), transport_.c_str(),
+                    queue, stereo_slop_s * 1e3, age_penalty);
 
         auto qos = rclcpp::QoS(rclcpp::KeepLast(10))
                        .reliable()
@@ -146,7 +163,7 @@ public:
         kf_pub_ = this->create_publisher<visual_inertial::msg::Keyframe>("keyframes", qos);
 
         imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
-            "/oak/imu/data",
+            "/oak/imu",
             rclcpp::SensorDataQoS(),
             std::bind(&FeatureNode::imuCallback_, this, std::placeholders::_1));
 
@@ -183,7 +200,7 @@ private:
     message_filters::Subscriber<sensor_msgs::msg::CameraInfo> sub_left_info_, sub_right_info_;
 
     // 4-way sync policy: (left_img, left_info, right_img, right_info)
-    using SyncPolicy = message_filters::sync_policies::ExactTime<
+    using SyncPolicy = message_filters::sync_policies::ApproximateTime<
         sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo>;
     std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
 
@@ -216,6 +233,14 @@ private:
     rclcpp::Subscription<visual_inertial::msg::ImuBias>::SharedPtr bias_sub_;
     std::atomic<uint64_t> last_bias_kf_id_{0}; // ignore old bias updates
 
+    // debug stats
+    std::mutex stamp_mtx_;
+    double last_img_stamp_s_ = 0.0;
+    double last_imu_stamp_s_ = 0.0;
+    bool have_last_img_stamp_ = false;
+    bool have_last_imu_stamp_ = false;
+    // debug stats -end
+
     void biasCallback_(const visual_inertial::msg::ImuBias::SharedPtr msg)
     {
         // Optional: only accept monotonic keyframe bias updates
@@ -230,11 +255,6 @@ private:
         b.gyro = Eigen::Vector3d(msg->gyro_bias.x, msg->gyro_bias.y, msg->gyro_bias.z);
 
         visual_inertial_->setImuBias(b);
-
-        // (Optional) light debug
-        // std::cout << "[BIAS] kf_id=" << kf_id
-        //           << " accel=" << b.accel.transpose()
-        //           << " gyro=" << b.gyro.transpose() << "\n";
     }
 
     void cb(const sensor_msgs::msg::Image::ConstSharedPtr &left_msg,
@@ -242,7 +262,45 @@ private:
             const sensor_msgs::msg::Image::ConstSharedPtr &right_msg,
             const sensor_msgs::msg::CameraInfo::ConstSharedPtr &right_info)
     {
+
+        const double tL = rclcpp::Time(left_msg->header.stamp).seconds();
+        const double tR = rclcpp::Time(right_msg->header.stamp).seconds();
+        const double dLR = std::abs(tL - tR);
+
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+                             "[SYNC] tL=%.9f tR=%.9f |L-R|=%.6f ms", tL, tR, dLR * 1e3);
+
         auto t0 = std::chrono::steady_clock::now();
+
+        const double t_img = rclcpp::Time(left_msg->header.stamp).seconds();
+
+        // debug stats - end
+        double t_imu = 0.0;
+        bool have_imu = false;
+        {
+            std::lock_guard<std::mutex> lk(stamp_mtx_);
+            last_img_stamp_s_ = t_img;
+            have_last_img_stamp_ = true;
+
+            have_imu = have_last_imu_stamp_;
+            t_imu = last_imu_stamp_s_;
+        }
+
+        if (have_imu)
+        {
+            const double dt = t_img - t_imu;
+            RCLCPP_INFO_THROTTLE(
+                get_logger(), *get_clock(), 1000,
+                "[SYNCDBG] img=%.6f imu_last=%.6f (img-imu)=%.6f s",
+                t_img, t_imu, dt);
+        }
+        else
+        {
+            RCLCPP_INFO_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "[SYNCDBG] img=%.6f imu_last=NA", t_img);
+        }
+        // debug stats - end
 
         auto left_cv = cv_bridge::toCvShare(left_msg, left_msg->encoding);
         auto right_cv = cv_bridge::toCvShare(right_msg, right_msg->encoding);
@@ -255,8 +313,16 @@ private:
             const auto model = makeStereoModel(*left_info, *right_info);
             visual_inertial_->setCalibration(model);
             vo_calibrated_ = true;
-        }
 
+            logStereoCalibration_(*left_info, *right_info, model);
+
+            // also log your runtime sync settings (handy when you launch with params)
+            RCLCPP_INFO(this->get_logger(),
+                        "[CALIB SET] transport='%s' topics: L='%s' R='%s' L_info='%s' R_info='%s'",
+                        transport_.c_str(),
+                        input_topic_left_.c_str(), input_topic_right_.c_str(),
+                        left_info_t.c_str(), right_info_t.c_str());
+        }
         // Convert ROS time to double seconds
         const rclcpp::Time ts = left_msg->header.stamp;
         const double t_curr = ts.seconds();
@@ -319,45 +385,6 @@ private:
                 pending_kfs_.push_back(std::move(result.kf));
             }
             kf_cv_.notify_one();
-
-            // visual_inertial::msg::Keyframe msg;
-            // msg.header.stamp = left_msg->header.stamp; // or rclcpp::Clock().now()
-            // msg.header.frame_id = "world";             // set your world frame
-            // msg.kf_id = result.kf.kf_id;
-            // msg.t_start = result.kf.t_start;
-            // msg.t_end = result.kf.t_end;
-
-            // msg.pose_wc.position.x = result.kf.T_WC.translation().x();
-            // msg.pose_wc.position.y = result.kf.T_WC.translation().y();
-            // msg.pose_wc.position.z = result.kf.T_WC.translation().z();
-            // Eigen::Quaterniond q(result.kf.T_WC.rotation());
-            // msg.pose_wc.orientation.w = q.w();
-            // msg.pose_wc.orientation.x = q.x();
-            // msg.pose_wc.orientation.y = q.y();
-            // msg.pose_wc.orientation.z = q.z();
-
-            // const auto N = result.kf.ids.size();
-            // msg.track_ids.resize(N);
-            // msg.u_l.resize(N);
-            // msg.v_l.resize(N);
-            // msg.u_r.resize(N);
-            // msg.v_r.resize(N);
-            // msg.has_right.resize(N);
-
-            // for (size_t i = 0; i < N; ++i)
-            // {
-            //     msg.track_ids[i] = result.kf.ids[i];
-            //     msg.u_l[i] = result.kf.pl[i].x;
-            //     msg.v_l[i] = result.kf.pl[i].y;
-            //     msg.u_r[i] = result.kf.pr[i].x;
-            //     msg.v_r[i] = result.kf.pr[i].y;
-            //     msg.has_right[i] = result.kf.has_r[i];
-            // }
-
-            // msg.has_imu = result.kf.has_imu ? uint8_t{1} : uint8_t{0};
-            // msg.pim_bytes = result.kf.pim_bytes;
-
-            // kf_pub_->publish(msg);
         }
     }
 
@@ -385,7 +412,7 @@ private:
                 ev.has_imu = false;
                 ev.pim_bytes.clear();
 
-                publishKeyframe_(ev); // your existing "struct -> msg -> publish"
+                publishKeyframe_(ev);
 
                 have_last_finalized_ = true;
                 last_finalized_kf_id_ = ev.kf_id;
@@ -395,7 +422,7 @@ private:
 
             // Sanity: ensure we are chaining consecutive keyframes
             const uint64_t prev_id = last_finalized_kf_id_;
-            const double t0 = ev.t_start; // should equal last_finalized_t_end_
+            const double t0 = ev.t_start;
             const double t1 = ev.t_end;
 
             const bool ids_ok = (ev.kf_id == prev_id + 1);
@@ -403,12 +430,10 @@ private:
 
             if (!ids_ok || !times_ok)
             {
-                // Don't risk consuming the IMU buffer with the wrong interval.
                 ev.has_imu = false;
                 ev.pim_bytes.clear();
                 publishKeyframe_(ev);
 
-                // Rebase the chain at this KF
                 last_finalized_kf_id_ = ev.kf_id;
                 last_finalized_t_end_ = ev.t_end;
                 continue;
@@ -423,7 +448,6 @@ private:
             if (stop_.load())
                 break;
 
-            // Build preintegrated bytes (this consumes IMU up to t1 inside the preintegrator)
             auto pkt = visual_inertial_->buildImuPacket(prev_id, t0, ev.kf_id, t1);
 
             if (pkt && pkt->valid)
@@ -439,7 +463,6 @@ private:
 
             publishKeyframe_(ev);
 
-            // advance chain
             last_finalized_kf_id_ = ev.kf_id;
             last_finalized_t_end_ = ev.t_end;
         }
@@ -449,7 +472,7 @@ private:
     {
         visual_inertial::msg::Keyframe msg;
         msg.header.stamp = rclcpp::Clock().now();
-        msg.header.frame_id = "world"; // set your world frame
+        msg.header.frame_id = "world";
         msg.kf_id = ev.kf_id;
         msg.t_start = ev.t_start;
         msg.t_end = ev.t_end;
@@ -546,6 +569,95 @@ private:
 
         // wake finalizer: new IMU data may satisfy coverage for pending keyframes
         kf_cv_.notify_one();
+
+        const double t_imu_raw = rclcpp::Time(msg->header.stamp).seconds();
+
+        // debug stats
+        double t_img = 0.0;
+        bool have_img = false;
+        {
+            std::lock_guard<std::mutex> lk(stamp_mtx_);
+            last_imu_stamp_s_ = t_imu_raw;
+            have_last_imu_stamp_ = true;
+
+            have_img = have_last_img_stamp_;
+            t_img = last_img_stamp_s_;
+        }
+
+        if (have_img)
+        {
+            const double dt = t_img - t_imu_raw;
+            RCLCPP_INFO_THROTTLE(
+                get_logger(), *get_clock(), 1000,
+                "[SYNCDBG] imu=%.6f img_last=%.6f (img-imu)=%.6f s",
+                t_imu_raw, t_img, dt);
+        }
+        // debug stats - end
+    }
+
+    void logStereoCalibration_(
+        const sensor_msgs::msg::CameraInfo &L,
+        const sensor_msgs::msg::CameraInfo &R,
+        const CameraRig &rig)
+    {
+        auto fmtK = [](const Eigen::Matrix3d &K)
+        {
+            std::ostringstream ss;
+            ss.setf(std::ios::fixed);
+            ss << std::setprecision(6);
+            ss << "[[" << K(0, 0) << ", " << K(0, 1) << ", " << K(0, 2) << "], "
+               << "[" << K(1, 0) << ", " << K(1, 1) << ", " << K(1, 2) << "], "
+               << "[" << K(2, 0) << ", " << K(2, 1) << ", " << K(2, 2) << "]]";
+            return ss.str();
+        };
+
+        auto p3_or_nan = [](const sensor_msgs::msg::CameraInfo &ci) -> double
+        {
+            if (ci.p.size() == 12)
+                return ci.p[3];
+            return std::numeric_limits<double>::quiet_NaN();
+        };
+
+        const double fxL = rig.left.K(0, 0), fyL = rig.left.K(1, 1), cxL = rig.left.K(0, 2), cyL = rig.left.K(1, 2);
+        const double fxR = rig.right.K(0, 0), fyR = rig.right.K(1, 1), cxR = rig.right.K(0, 2), cyR = rig.right.K(1, 2);
+
+        RCLCPP_INFO(this->get_logger(),
+                    "\n[CALIB SET]\n"
+                    "  L frame_id: %s  w,h: %u,%u  model: %s  D size: %zu\n"
+                    "  R frame_id: %s  w,h: %u,%u  model: %s  D size: %zu\n"
+                    "  L K: fx=%.6f fy=%.6f cx=%.6f cy=%.6f\n"
+                    "  R K: fx=%.6f fy=%.6f cx=%.6f cy=%.6f\n"
+                    "  L Kmat=%s\n"
+                    "  R Kmat=%s\n"
+                    "  L P[3]=%.6f   R P[3]=%.6f   (Tx from R: -P3/fxR)\n"
+                    "  Baseline (rig.baseline)=%.6f m\n",
+                    L.header.frame_id.c_str(), L.width, L.height, L.distortion_model.c_str(), L.d.size(),
+                    R.header.frame_id.c_str(), R.width, R.height, R.distortion_model.c_str(), R.d.size(),
+                    fxL, fyL, cxL, cyL,
+                    fxR, fyR, cxR, cyR,
+                    fmtK(rig.left.K).c_str(),
+                    fmtK(rig.right.K).c_str(),
+                    p3_or_nan(L), p3_or_nan(R),
+                    rig.baseline);
+
+        // Also print full P vectors if you want (throttled-ish; only printed once anyway)
+        {
+            std::ostringstream ss;
+            ss.setf(std::ios::fixed);
+            ss << std::setprecision(6);
+            ss << "  L P=[";
+            for (size_t i = 0; i < L.p.size(); ++i)
+            {
+                ss << L.p[i] << (i + 1 < L.p.size() ? ", " : "");
+            }
+            ss << "]\n  R P=[";
+            for (size_t i = 0; i < R.p.size(); ++i)
+            {
+                ss << R.p[i] << (i + 1 < R.p.size() ? ", " : "");
+            }
+            ss << "]";
+            RCLCPP_INFO(this->get_logger(), "%s", ss.str().c_str());
+        }
     }
 };
 
