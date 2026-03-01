@@ -10,6 +10,9 @@
 #include <visual_inertial_optimization/optimization.hpp>
 #include <visual_inertial_optimization/types.hpp>
 
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
+
 #include <opencv2/core.hpp>
 
 #include <Eigen/Geometry>
@@ -24,6 +27,8 @@
 #include <cmath>
 #include <algorithm>
 #include <chrono>
+#include <unordered_map>
+#include <vector>
 
 #include <visual_inertial/msg/imu_bias.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
@@ -238,6 +243,21 @@ public:
         // publisher for imu bias
         auto bias_qos = rclcpp::QoS(rclcpp::KeepLast(2)).reliable().durability_volatile();
         bias_pub_ = this->create_publisher<visual_inertial::msg::ImuBias>("imu_bias", bias_qos);
+
+        // landmark pub
+        // In your OptimizationNode constructor (after parameters + tf broadcaster setup)
+        // Params
+        lm_pub_hz_ = declare_parameter<double>("landmark_pub_hz", 2.0);
+
+        // Publisher
+        auto lm_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile();
+        lm_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("optimized_landmarks", lm_qos);
+
+        // Timer (publish at constant rate, independent of keyframes)
+        lm_timer_ = create_wall_timer(
+            std::chrono::duration<double>(1.0 / std::max(1e-6, lm_pub_hz_)),
+            [this]()
+            { this->publishLandmarksPointCloud_(); });
     }
 
     ~OptimizationNode() override
@@ -249,6 +269,61 @@ public:
     }
 
 private:
+    void mergeLandmarksIntoCache_(const std::vector<LandmarkEstimate> &lms)
+    {
+        std::lock_guard<std::mutex> lk(lm_mtx_);
+
+        for (const auto &e : lms)
+        {
+            const uint32_t tid = static_cast<uint32_t>(e.tid);
+            auto &slot = lm_cache_[tid];
+            slot.p_map = e.p_W;
+            slot.last_seen_kf = e.last_seen_kf;
+        }
+
+        pruneLandmarkCacheLocked_();
+    }
+
+    void pruneLandmarkCacheLocked_()
+    {
+        if (lm_cache_.size() <= lm_cache_max_)
+            return;
+        if (lm_cache_max_ == 0)
+        {
+            lm_cache_.clear();
+            return;
+        }
+
+        // Build list of (tid, last_seen)
+        std::vector<std::pair<uint32_t, uint64_t>> items;
+        items.reserve(lm_cache_.size());
+        for (const auto &kv : lm_cache_)
+        {
+            items.emplace_back(kv.first, kv.second.last_seen_kf);
+        }
+
+        // Find cutoff for newest lm_cache_max_ by last_seen
+        auto nth = items.end() - static_cast<std::ptrdiff_t>(lm_cache_max_);
+        std::nth_element(items.begin(), nth, items.end(),
+                         [](const auto &a, const auto &b)
+                         { return a.second < b.second; });
+        const uint64_t cutoff = nth->second;
+
+        // Erase everything older than cutoff
+        for (auto it = lm_cache_.begin(); it != lm_cache_.end();)
+        {
+            if (it->second.last_seen_kf < cutoff)
+                it = lm_cache_.erase(it);
+            else
+                ++it;
+        }
+
+        // If still too big due to ties, erase arbitrary extras
+        while (lm_cache_.size() > lm_cache_max_)
+        {
+            lm_cache_.erase(lm_cache_.begin());
+        }
+    }
     void maybeInitRigAndOptimizer_()
     {
         if (rig_ready_)
@@ -325,6 +400,13 @@ private:
             const auto res = opt->push(ev, T_Ck_Ckm1);
             if (!res)
                 continue;
+
+            // ---- Update persistent landmark cache ----
+            {
+                // Get current smoother landmark estimates (alive in window right now)
+                const auto lms = opt->getLandmarks(lm_fetch_max_);
+                mergeLandmarksIntoCache_(lms);
+            }
 
             // publishing imu bias
             visual_inertial::msg::ImuBias bmsg;
@@ -416,6 +498,52 @@ private:
         tf_broadcaster_->sendTransform(tf);
     }
 
+    // Add this method to OptimizationNode (private:)
+    void publishLandmarksPointCloud_()
+    {
+        if (!lm_pub_)
+            return;
+
+        // Snapshot cache under lock
+        std::vector<Eigen::Vector3d> pts;
+        pts.reserve(lm_cache_.size());
+        {
+            std::lock_guard<std::mutex> lk(lm_mtx_);
+            pts.reserve(lm_cache_.size());
+            for (const auto &kv : lm_cache_)
+            {
+                pts.push_back(kv.second.p_map);
+            }
+        }
+
+        sensor_msgs::msg::PointCloud2 msg;
+        msg.header.stamp = this->now();
+        msg.header.frame_id = map_frame_id_; // usually "map"
+        msg.height = 1;
+        msg.width = static_cast<uint32_t>(pts.size());
+        msg.is_dense = false;
+
+        sensor_msgs::PointCloud2Modifier mod(msg);
+        mod.setPointCloud2FieldsByString(1, "xyz");
+        mod.resize(pts.size());
+
+        sensor_msgs::PointCloud2Iterator<float> it_x(msg, "x");
+        sensor_msgs::PointCloud2Iterator<float> it_y(msg, "y");
+        sensor_msgs::PointCloud2Iterator<float> it_z(msg, "z");
+
+        for (const auto &p : pts)
+        {
+            *it_x = static_cast<float>(p.x());
+            *it_y = static_cast<float>(p.y());
+            *it_z = static_cast<float>(p.z());
+            ++it_x;
+            ++it_y;
+            ++it_z;
+        }
+
+        lm_pub_->publish(msg);
+    }
+
 private:
     // Topics / frames
     std::string keyframe_topic_;
@@ -472,6 +600,22 @@ private:
     double publish_tf_hz_ = 30.0;
 
     rclcpp::Time last_filt_update_;
+
+    // landmark cache
+    // --- Landmark cache (persistent across window) ---
+    std::mutex lm_mtx_;
+    struct CachedLm
+    {
+        Eigen::Vector3d p_map = Eigen::Vector3d::Zero();
+        uint64_t last_seen_kf = 0;
+    };
+    std::unordered_map<uint32_t, CachedLm> lm_cache_; // tid -> cached point
+    size_t lm_cache_max_{2000};
+    size_t lm_fetch_max_{0}; // 0 = fetch all currently-available landmarks
+
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lm_pub_;
+    rclcpp::TimerBase::SharedPtr lm_timer_;
+    double lm_pub_hz_{2.0};
 };
 
 int main(int argc, char **argv)

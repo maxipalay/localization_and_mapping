@@ -196,6 +196,8 @@
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
+#include <vector>
+#include <mutex>
 
 #include <Eigen/Geometry>
 
@@ -218,6 +220,15 @@
 
 #include <gtsam/navigation/CombinedImuFactor.h>
 #include <gtsam/navigation/ImuBias.h>
+
+struct LandmarkEstimate
+{
+    using TrackId = KeyframeEvent::TrackId;
+
+    TrackId tid = 0;
+    Eigen::Vector3d p_W = Eigen::Vector3d::Zero(); // map/world coords
+    uint64_t last_seen_kf = 0;
+};
 
 struct OptimizationConfig
 {
@@ -297,6 +308,10 @@ public:
         const KeyframeEvent &kf,
         const std::optional<Eigen::Isometry3d> &T_Ck_Ckm1 = std::nullopt);
 
+    // Returns landmark estimates currently available in the smoother.
+    // If max_points>0, returns up to max_points, preferring most-recently-seen.
+    std::vector<LandmarkEstimate> getLandmarks(size_t max_points = 0) const;
+
 private:
     static inline gtsam::Key X_(uint64_t kf_id) { return gtsam::Symbol('x', kf_id); }
     static inline gtsam::Key V_(uint64_t kf_id) { return gtsam::Symbol('v', kf_id); } // NEW
@@ -352,4 +367,6 @@ private:
     uint64_t last_kf_id_ = 0;
 
     std::unordered_map<TrackId, uint64_t> landmark_last_seen_kf_;
+
+    mutable std::mutex mtx_;
 };

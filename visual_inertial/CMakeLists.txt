@@ -21,6 +21,7 @@ find_package(builtin_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(Boost REQUIRED COMPONENTS serialization)
+find_package(eigen3_cmake_module REQUIRED)
 
 add_executable(tracking_node src/tracking_node.cpp)
 add_executable(optimization_node src/optimization_node.cpp)

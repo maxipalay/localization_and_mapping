@@ -186,6 +186,7 @@
 #include <sstream>
 #include <string>
 #include <iostream>
+#include <algorithm>
 
 #include <gtsam/linear/NoiseModel.h>
 
@@ -193,6 +194,55 @@
 #include <boost/archive/binary_iarchive.hpp>
 #include <boost/serialization/shared_ptr.hpp>
 #include <boost/serialization/vector.hpp>
+
+std::vector<LandmarkEstimate> Optimizer::getLandmarks(size_t max_points) const
+{
+  std::lock_guard<std::mutex> lk(mtx_);
+
+  std::vector<LandmarkEstimate> out;
+  out.reserve(landmark_last_seen_kf_.size());
+
+  for (const auto &kv : landmark_last_seen_kf_)
+  {
+    const TrackId tid = kv.first;
+    const uint64_t last_seen = kv.second;
+    const gtsam::Key lk_key = L_(tid);
+
+    try
+    {
+      const gtsam::Point3 p = smoother_.calculateEstimate<gtsam::Point3>(lk_key);
+      LandmarkEstimate e;
+      e.tid = tid;
+      e.p_W = Eigen::Vector3d(p.x(), p.y(), p.z());
+      e.last_seen_kf = last_seen;
+      out.push_back(e);
+    }
+    catch (...)
+    {
+      // Landmark might have been marginalized already; skip.
+    }
+  }
+
+  if (max_points > 0 && out.size() > max_points)
+  {
+    // Keep most recent max_points by last_seen_kf
+    std::nth_element(out.begin(), out.end() - max_points, out.end(),
+                     [](const LandmarkEstimate &a, const LandmarkEstimate &b)
+                     {
+                       return a.last_seen_kf < b.last_seen_kf;
+                     });
+    out.erase(out.begin(), out.end() - max_points);
+  }
+
+  // Optional: sort newest->oldest for nicer behavior
+  std::sort(out.begin(), out.end(),
+            [](const LandmarkEstimate &a, const LandmarkEstimate &b)
+            {
+              return a.last_seen_kf > b.last_seen_kf;
+            });
+
+  return out;
+}
 
 static inline gtsam::Point3 toGtsamPoint3_(const Eigen::Vector3d &p)
 {
@@ -246,6 +296,8 @@ std::optional<OptimizationResult> Optimizer::push(
     const KeyframeEvent &kf,
     const std::optional<Eigen::Isometry3d> &T_Ck_Ckm1)
 {
+  std::lock_guard<std::mutex> lk(mtx_);
+
   if (kf.kf_id == 0)
     return std::nullopt;
   if (!cfg_.rig.valid())
