@@ -167,7 +167,7 @@ public:
             rclcpp::SensorDataQoS(),
             std::bind(&FeatureNode::imuCallback_, this, std::placeholders::_1));
 
-        stop_.store(false);
+        stop_worker_.store(false);
         kf_worker_ = std::thread([this]()
                                  { this->kfWorkerLoop_(); });
 
@@ -177,6 +177,14 @@ public:
         bias_sub_ = this->create_subscription<visual_inertial::msg::ImuBias>(
             "imu_bias", bias_qos,
             std::bind(&FeatureNode::biasCallback_, this, std::placeholders::_1));
+    }
+
+    ~FeatureNode() override
+    {
+        stop_worker_.store(true);
+        kf_worker_cv_.notify_all();
+        if (kf_worker_.joinable())
+            kf_worker_.join();
     }
 
 private:
@@ -216,19 +224,6 @@ private:
     bool have_imu_offset_ = false;
     double cam_minus_imu_offset_s_ = 0.0; // t_cam = t_imu + cam_minus_imu_offset_s_
 
-    // pending keyframes waiting for IMU preintegration
-    std::mutex kf_mtx_;
-    std::condition_variable kf_cv_;
-    std::deque<KeyframeEvent> pending_kfs_;
-
-    std::thread kf_worker_;
-    std::atomic<bool> stop_{false};
-
-    // book-keeping for the IMU edge
-    bool have_last_finalized_ = false;
-    uint64_t last_finalized_kf_id_ = 0;
-    double last_finalized_t_end_ = 0.0;
-
     // bias updates
     rclcpp::Subscription<visual_inertial::msg::ImuBias>::SharedPtr bias_sub_;
     std::atomic<uint64_t> last_bias_kf_id_{0}; // ignore old bias updates
@@ -240,6 +235,11 @@ private:
     bool have_last_img_stamp_ = false;
     bool have_last_imu_stamp_ = false;
     // debug stats -end
+
+    std::thread kf_worker_;
+    std::mutex kf_worker_mtx_;
+    std::condition_variable kf_worker_cv_;
+    std::atomic<bool> stop_worker_{false};
 
     void biasCallback_(const visual_inertial::msg::ImuBias::SharedPtr msg)
     {
@@ -377,94 +377,38 @@ private:
         RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
                              "imageCb wall: %.3f ms (%.1f FPS)", ms, 1000.0 / std::max(ms, 0.001));
 
-        if (result.kf_valid)
-        {
-            // If keyframe produced, enqueue for IMU finalization (do NOT publish here)
-            {
-                std::lock_guard<std::mutex> lk(kf_mtx_);
-                pending_kfs_.push_back(std::move(result.kf));
-            }
-            kf_cv_.notify_one();
-        }
+        kf_worker_cv_.notify_one();
     }
 
     void kfWorkerLoop_()
     {
-        while (rclcpp::ok() && !stop_.load())
+        while (rclcpp::ok() && !stop_worker_.load())
         {
-            KeyframeEvent ev;
-
-            // wait for a pending KF
+            // Wait for new IMU or new frames/KFs
             {
-                std::unique_lock<std::mutex> lk(kf_mtx_);
-                kf_cv_.wait(lk, [&]
-                            { return stop_.load() || !pending_kfs_.empty(); });
-                if (stop_.load())
-                    break;
-
-                ev = std::move(pending_kfs_.front());
-                pending_kfs_.pop_front();
+                std::unique_lock<std::mutex> lk(kf_worker_mtx_);
+                kf_worker_cv_.wait_for(lk, std::chrono::milliseconds(2),
+                                       [&]
+                                       { return stop_worker_.load(); });
             }
-
-            // First KF: publish without IMU (no previous interval)
-            if (!have_last_finalized_)
-            {
-                ev.has_imu = false;
-                ev.pim_bytes.clear();
-
-                publishKeyframe_(ev);
-
-                have_last_finalized_ = true;
-                last_finalized_kf_id_ = ev.kf_id;
-                last_finalized_t_end_ = ev.t_end;
-                continue;
-            }
-
-            // Sanity: ensure we are chaining consecutive keyframes
-            const uint64_t prev_id = last_finalized_kf_id_;
-            const double t0 = ev.t_start;
-            const double t1 = ev.t_end;
-
-            const bool ids_ok = (ev.kf_id == prev_id + 1);
-            const bool times_ok = (std::abs(t0 - last_finalized_t_end_) < 1e-3) && (t1 > t0);
-
-            if (!ids_ok || !times_ok)
-            {
-                ev.has_imu = false;
-                ev.pim_bytes.clear();
-                publishKeyframe_(ev);
-
-                last_finalized_kf_id_ = ev.kf_id;
-                last_finalized_t_end_ = ev.t_end;
-                continue;
-            }
-
-            // Wait until IMU has coverage up to t1
-            while (!stop_.load() && !visual_inertial_->hasImuCoverage(t1))
-            {
-                std::unique_lock<std::mutex> lk(kf_mtx_);
-                kf_cv_.wait_for(lk, std::chrono::milliseconds(2));
-            }
-            if (stop_.load())
+            if (stop_worker_.load())
                 break;
 
-            auto pkt = visual_inertial_->buildImuPacket(prev_id, t0, ev.kf_id, t1);
-
-            if (pkt && pkt->valid)
+            // Try to finalize as many as possible
+            for (;;)
             {
-                ev.has_imu = true;
-                ev.pim_bytes = std::move(pkt->bytes);
-            }
-            else
-            {
-                ev.has_imu = false;
-                ev.pim_bytes.clear();
-            }
+                const bool did_one = visual_inertial_->tryFinalizeOne();
 
-            publishKeyframe_(ev);
+                // Drain ready queue every pass
+                KeyframeEvent ev;
+                while (visual_inertial_->tryPopFinalizedKeyframe(ev))
+                {
+                    publishKeyframe_(ev); // your existing msg conversion + publisher
+                }
 
-            last_finalized_kf_id_ = ev.kf_id;
-            last_finalized_t_end_ = ev.t_end;
+                if (!did_one)
+                    break;
+            }
         }
     }
 
@@ -568,7 +512,8 @@ private:
         visual_inertial_->processImu(s);
 
         // wake finalizer: new IMU data may satisfy coverage for pending keyframes
-        kf_cv_.notify_one();
+        // worker_.notify_one();
+        kf_worker_cv_.notify_one();
 
         const double t_imu_raw = rclcpp::Time(msg->header.stamp).seconds();
 

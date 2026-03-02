@@ -398,7 +398,12 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         //     ev.has_imu = true;
         // }
 
-        output.kf = ev;
+        // output.kf = ev;
+        ev.has_imu = false;
+        ev.pim_bytes.clear();
+
+        // instead of building IMU here:
+        submitPendingKeyframe_(std::move(ev));
 
         timestamp_last_kf_ = stamp; // update last stamp
         prev_kf_id_ = ev.kf_id;
@@ -436,4 +441,142 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     d_gray8_left_prev_ = d_gray8_left_.clone();
 
     return output;
+}
+
+void VisualInertial::submitPendingKeyframe_(KeyframeEvent &&ev)
+{
+    std::lock_guard<std::mutex> lk(kf_mtx_);
+    pending_kfs_.push_back(std::move(ev));
+    while (pending_kfs_.size() > params_.kf_pending_queue_max)
+        pending_kfs_.pop_front();
+}
+
+bool VisualInertial::tryPopFinalizedKeyframe(KeyframeEvent &out)
+{
+    std::lock_guard<std::mutex> lk(kf_mtx_);
+    if (ready_kfs_.empty())
+        return false;
+    out = std::move(ready_kfs_.front());
+    ready_kfs_.pop_front();
+    return true;
+}
+
+bool VisualInertial::hasImuCoverageForFinalize_(double t1) const
+{
+    // Margin-based coverage check (less brittle than exact comparisons).
+    // Adjust names if your ImuPreintegrator API differs.
+    return imu_preint_.size() >= 2 &&
+           imu_preint_.newestTime() >= (t1 - params_.imu_coverage_margin_s);
+}
+
+bool VisualInertial::tryFinalizeOne()
+{
+    KeyframeEvent ev;
+
+    // Peek the next pending KF (do NOT pop yet)
+    {
+        std::lock_guard<std::mutex> lk(kf_mtx_);
+        if (pending_kfs_.empty())
+            return false;
+        ev = pending_kfs_.front(); // copy is fine at 1–10 Hz
+    }
+
+    // 1) First finalized KF: emit without IMU (bootstrap)
+    if (!have_last_finalized_)
+    {
+        ev.has_imu = false;
+        ev.pim_bytes.clear();
+
+        std::lock_guard<std::mutex> lk(kf_mtx_);
+        if (!pending_kfs_.empty() && pending_kfs_.front().kf_id == ev.kf_id)
+            pending_kfs_.pop_front();
+        ready_kfs_.push_back(std::move(ev));
+        while (ready_kfs_.size() > params_.kf_ready_queue_max) ready_kfs_.pop_front();
+
+        have_last_finalized_ = true;
+        last_finalized_kf_id_ = ready_kfs_.back().kf_id;
+        last_finalized_t_end_ = ready_kfs_.back().t_end;
+
+        std::cout << "[KFfinal] first KF kf_id=" << last_finalized_kf_id_
+                  << " (no IMU)\n";
+        return true;
+    }
+
+    // 2) Chain sanity
+    const uint64_t prev_id = last_finalized_kf_id_;
+    const double t0 = ev.t_start;
+    const double t1 = ev.t_end;
+
+    const bool ids_ok   = (ev.kf_id == prev_id + 1);
+    const bool times_ok = (std::abs(t0 - last_finalized_t_end_) < 1e-3) && (t1 > t0);
+
+    if (!ids_ok || !times_ok)
+    {
+        // Emit without IMU and reset anchor
+        ev.has_imu = false;
+        ev.pim_bytes.clear();
+
+        std::lock_guard<std::mutex> lk(kf_mtx_);
+        if (!pending_kfs_.empty() && pending_kfs_.front().kf_id == ev.kf_id)
+            pending_kfs_.pop_front();
+        ready_kfs_.push_back(std::move(ev));
+        while (ready_kfs_.size() > params_.kf_ready_queue_max) ready_kfs_.pop_front();
+
+        last_finalized_kf_id_ = ready_kfs_.back().kf_id;
+        last_finalized_t_end_ = ready_kfs_.back().t_end;
+
+        std::cout << std::fixed << std::setprecision(6)
+                  << "[KFfinal] chain break: kf_id=" << last_finalized_kf_id_
+                  << " ids_ok=" << (ids_ok?1:0)
+                  << " times_ok=" << (times_ok?1:0)
+                  << " t0=" << t0
+                  << " last_t_end=" << last_finalized_t_end_
+                  << " t1=" << t1 << "\n";
+        return true;
+    }
+
+    // 3) If not enough IMU yet, keep pending and try later
+    // (Use your existing coverage function if you have it; this margin-based check is what you were using.)
+    const bool have_cov = hasImuCoverageForFinalize_(t1);
+    if (!have_cov)
+        return false;
+
+    // 4) Attempt to build packet. If it fails due to timing, DO NOT drop KF; retry later.
+    auto pkt_opt = imu_preint_.buildAndConsume(prev_id, t0, ev.kf_id, t1);
+
+    if (!pkt_opt || !pkt_opt->valid)
+    {
+        // If we *thought* we had coverage but build still failed, it's almost always boundary timing.
+        // Treat as "not ready yet" and retry on the next worker wakeup.
+        // (If you want a hard timeout, you can add it later.)
+        std::cout << std::fixed << std::setprecision(6)
+                  << "[KFfinal] pkt not ready, will retry: kf_id=" << ev.kf_id
+                  << " t0=" << t0 << " t1=" << t1
+                  << " imu_new=" << imu_preint_.newestTime()
+                  << " imu_old=" << imu_preint_.oldestTime()
+                  << " imu_sz=" << imu_preint_.size()
+                  << "\n";
+        return false;
+    }
+
+    // 5) Success: now pop pending and publish finalized
+    ev.has_imu = true;
+    ev.pim_bytes = std::move(pkt_opt->bytes);
+
+    {
+        std::lock_guard<std::mutex> lk(kf_mtx_);
+        if (!pending_kfs_.empty() && pending_kfs_.front().kf_id == ev.kf_id)
+            pending_kfs_.pop_front();
+
+        ready_kfs_.push_back(std::move(ev));
+        while (ready_kfs_.size() > params_.kf_ready_queue_max) ready_kfs_.pop_front();
+
+        last_finalized_kf_id_ = ready_kfs_.back().kf_id;
+        last_finalized_t_end_ = ready_kfs_.back().t_end;
+    }
+
+    std::cout << "[KFfinal] finalized kf_id=" << last_finalized_kf_id_
+              << " imu_bytes=" << ready_kfs_.back().pim_bytes.size() << "\n";
+
+    return true;
 }

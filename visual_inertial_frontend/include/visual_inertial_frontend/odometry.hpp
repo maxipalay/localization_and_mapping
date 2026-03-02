@@ -7,6 +7,12 @@
 #include "visual_inertial_frontend/keyframe_policy.hpp"
 #include "visual_inertial_frontend/preintegrator.hpp"
 #include "visual_inertial_common/types.hpp"
+
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <optional>
+
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/calib3d.hpp>
 #include <iostream>
@@ -34,6 +40,10 @@ public:
         }
 
         Eigen::Isometry3d T_BC = default_T_BC();
+
+        double imu_coverage_margin_s = 0.05;
+        size_t kf_ready_queue_max = 30;
+        size_t kf_pending_queue_max = 30;
     };
 
     VisualInertial()
@@ -74,6 +84,14 @@ public:
         imu_preint_.setBias(b);
     }
 
+    // Called by the node-owned worker thread.
+    // Returns true if it finalized ONE pending keyframe and moved it into the ready queue.
+    // Returns false if nothing pending OR IMU coverage isn't ready yet.
+    bool tryFinalizeOne();
+
+    // Called by the node worker thread (or any thread): pop a finalized keyframe to publish.
+    bool tryPopFinalizedKeyframe(KeyframeEvent &out);
+
 private:
     Params params_;
     bool first_frame_ = true;
@@ -98,4 +116,17 @@ private:
     uint64_t prev_kf_id_ = 0;
 
     double timestamp_last_kf_ = 0.0;
+
+    // --- keyframe finalization queues (library-owned state, node-owned thread) ---
+    mutable std::mutex kf_mtx_;
+    std::deque<KeyframeEvent> pending_kfs_;
+    std::deque<KeyframeEvent> ready_kfs_;
+
+    bool have_last_finalized_{false};
+    uint64_t last_finalized_kf_id_{0};
+    double last_finalized_t_end_{0.0};
+
+    // Internal helpers
+    void submitPendingKeyframe_(KeyframeEvent &&ev);
+    bool hasImuCoverageForFinalize_(double t1) const;
 };
