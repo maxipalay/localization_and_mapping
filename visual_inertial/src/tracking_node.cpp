@@ -1,6 +1,3 @@
-// I might want to push this extra kf finalization work out of the node
-// feels like VisualInertial should expose an easier way to do this
-
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
