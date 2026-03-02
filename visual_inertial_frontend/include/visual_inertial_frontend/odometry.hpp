@@ -129,4 +129,94 @@ private:
     // Internal helpers
     void submitPendingKeyframe_(KeyframeEvent &&ev);
     bool hasImuCoverageForFinalize_(double t1) const;
+
+    struct Scratch
+    {
+        // Temporal LK
+        std::vector<cv::Point2f> pts_fw, pts_bw;
+        std::vector<uint8_t> status_fw, status_bw, status_fb;
+
+        // Stereo LK
+        std::vector<cv::Point2f> pts_fw_stereo, pts_bw_stereo;
+        std::vector<uint8_t> status_fw_stereo, status_bw_stereo, keep_stereo;
+
+        // PnP
+        std::vector<cv::Point3f> object_pts;
+        std::vector<cv::Point2f> image_pts;
+        std::vector<int> buf_idx;
+        std::vector<int> inliers;
+        std::vector<cv::Point3f> obj_in;
+        std::vector<cv::Point2f> img_in;
+
+        // Triangulation / 3D buffer
+        std::vector<cv::Point3f> X_curr;
+        std::vector<uint8_t> valid_X;
+
+        // Top-up
+        std::vector<cv::Point2f> new_pts;
+
+        // CPU mask reuse
+        cv::Mat cpu_mask;
+
+        void reserve(size_t n_tracks, size_t n_new, cv::Size img_sz)
+        {
+            pts_fw.reserve(n_tracks);
+            pts_bw.reserve(n_tracks);
+            status_fw.reserve(n_tracks);
+            status_bw.reserve(n_tracks);
+            status_fb.reserve(n_tracks);
+
+            pts_fw_stereo.reserve(n_tracks);
+            pts_bw_stereo.reserve(n_tracks);
+            status_fw_stereo.reserve(n_tracks);
+            status_bw_stereo.reserve(n_tracks);
+            keep_stereo.reserve(n_tracks);
+
+            object_pts.reserve(n_tracks);
+            image_pts.reserve(n_tracks);
+            buf_idx.reserve(n_tracks);
+            inliers.reserve(n_tracks);
+            obj_in.reserve(n_tracks);
+            img_in.reserve(n_tracks);
+
+            X_curr.reserve(n_tracks);
+            valid_X.reserve(n_tracks);
+
+            new_pts.reserve(n_new);
+
+            if (cpu_mask.empty() || cpu_mask.size() != img_sz)
+            {
+                cpu_mask.create(img_sz, CV_8U);
+            }
+        }
+
+        void clearPerFrame()
+        {
+            // Don’t shrink. Just clear sizes.
+            pts_fw.clear();
+            pts_bw.clear();
+            status_fw.clear();
+            status_bw.clear();
+            status_fb.clear();
+
+            pts_fw_stereo.clear();
+            pts_bw_stereo.clear();
+            status_fw_stereo.clear();
+            status_bw_stereo.clear();
+            keep_stereo.clear();
+
+            object_pts.clear();
+            image_pts.clear();
+            buf_idx.clear();
+            inliers.clear();
+            obj_in.clear();
+            img_in.clear();
+
+            X_curr.clear();
+            valid_X.clear();
+
+            new_pts.clear();
+        }
+    };
+    Scratch scratch_;
 };

@@ -42,13 +42,13 @@ VisualInertial::VisualInertial(const Params &p)
 {
 }
 
-static inline cv::Mat buildExclusionMask(const cv::Size &sz,
-                                         const std::vector<cv::Point2f> &keep,
-                                         int radius_px)
+static inline void buildExclusionMask(const cv::Size &sz,
+                                      const std::vector<cv::Point2f> &keep,
+                                      int radius_px,
+                                      cv::Mat &mask)
 {
-    cv::Mat mask(sz, CV_8U, cv::Scalar(255));
     if (radius_px <= 0 || keep.empty())
-        return mask;
+        return;
     for (const auto &p : keep)
     {
         // skip points outside (paranoia)
@@ -56,7 +56,7 @@ static inline cv::Mat buildExclusionMask(const cv::Size &sz,
             continue;
         cv::circle(mask, p, radius_px, cv::Scalar(0), -1, cv::LINE_AA);
     }
-    return mask;
+    return;
 }
 
 void VisualInertial::processImu(const ImuSample &sample)
@@ -77,13 +77,13 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         return output;
     }
 
-    // Upload both frames to device
-    d_gray8_left_.upload(gray8_left, stream_);
-    d_gray8_right_.upload(gray8_right, stream_);
-
     // first frame only
     if (first_frame_)
     {
+        scratch_.reserve(params_.target_features * 2, params_.target_features, gray8_left.size());
+        // Upload both frames to device
+        d_gray8_left_.upload(gray8_left, stream_);
+        d_gray8_right_.upload(gray8_right, stream_);
         std::vector<cv::Point2f> new_pts;
         new_pts.reserve(params_.target_features);
         feature_detector_.detect(d_gray8_left_, d_mask_, new_pts, params_.target_features);
@@ -92,6 +92,10 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         d_gray8_left_prev_ = d_gray8_left_.clone();
         return output;
     }
+    // Upload both frames to device
+    d_gray8_left_.upload(gray8_left, stream_);
+    d_gray8_right_.upload(gray8_right, stream_);
+    //
     tracks_buffer_.beginFrame();
 
     // get current tracks from buffer
@@ -102,13 +106,13 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     ///
 
     // temporal feature tracking previous frame -> current frame
-    std::vector<cv::Point2f> pts_fw;
-    std::vector<unsigned char> status_fw;
+    auto &pts_fw = scratch_.pts_fw;
+    auto &status_fw = scratch_.status_fw;
     tracker_temporal_.track(d_gray8_left_prev_, d_gray8_left_, pl_prev, pts_fw, status_fw);
 
     // temporal feature tracking current frame -> previous frame
-    std::vector<cv::Point2f> pts_bw;
-    std::vector<unsigned char> status_bw;
+    auto &pts_bw = scratch_.pts_bw;
+    auto &status_bw = scratch_.status_bw;
     tracker_temporal_.track(d_gray8_left_, d_gray8_left_prev_, pts_fw, pts_bw, status_bw);
 
     // generate status vector
@@ -116,7 +120,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     // generates the status vector
 
     uint16_t temporal_dropped = 0;
-    std::vector<unsigned char> status_fb; // the status after applying the gate - this aligns with status_fw & status_bw
+    auto &status_fb = scratch_.status_fb; // the status after applying the gate - this aligns with status_fw & status_bw
     status_fb.resize(pl_prev.size());
     for (size_t i = 0; i < status_fw.size(); ++i)
     {
@@ -138,17 +142,17 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     ///
 
     // spatial/cross camera feature tracking: left -> right  + backward pass
-    std::vector<cv::Point2f> pts_fw_stereo;
-    std::vector<unsigned char> status_fw_stereo;
+    auto &pts_fw_stereo = scratch_.pts_fw_stereo;
+    auto &status_fw_stereo = scratch_.status_fw_stereo;
     tracker_spatial_.track(d_gray8_left_, d_gray8_right_, tracks_buffer_.pl(), pts_fw_stereo, status_fw_stereo);
 
-    std::vector<cv::Point2f> pts_bw_stereo;
-    std::vector<unsigned char> status_bw_stereo;
+    auto &pts_bw_stereo = scratch_.pts_bw_stereo;
+    auto &status_bw_stereo = scratch_.status_bw_stereo;
     tracker_spatial_.track(d_gray8_right_, d_gray8_left_, pts_fw_stereo, pts_bw_stereo, status_bw_stereo);
     // std::cout << tracks_buffer_.pl().size() << " " << pts_bw_stereo.size() << std::endl;
     // gating/update db
     uint16_t stereo_dropped = 0;
-    std::vector<unsigned char> keep_stereo;
+    auto &keep_stereo = scratch_.keep_stereo;
     keep_stereo.resize(tracks_buffer_.pl().size());
     for (size_t i = 0; i < status_fw_stereo.size(); ++i)
     {
@@ -176,9 +180,9 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     // -----------------------------
     // 3) Build eligible PnP correspondences using TracksBuffer::gatherPnP()
     // -----------------------------
-    std::vector<cv::Point3f> object_pts;
-    std::vector<cv::Point2f> image_pts;
-    std::vector<int> buf_idx; // map: eligible index -> buffer index (needed for B-style gating)
+    auto &object_pts = scratch_.object_pts;
+    auto &image_pts = scratch_.image_pts;
+    auto &buf_idx = scratch_.buf_idx; // map: eligible index -> buffer index (needed for B-style gating)
 
     tracks_buffer_.gatherPnP(object_pts, image_pts, &buf_idx);
 
@@ -192,7 +196,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         // 4) solvePnPRansac (AP3P) + refineLM on inliers
         // -----------------------------
         cv::Mat rvec, tvec;
-        std::vector<int> inliers;
+        auto &inliers = scratch_.inliers;
 
         const int iterationsCount = 100;  // TODO tune
         const float reprojErrorPx = 2.0f; // TODO tune
@@ -216,10 +220,10 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
         // Refine using LM on inliers
         {
-            std::vector<cv::Point3f> obj_in;
-            std::vector<cv::Point2f> img_in;
-            obj_in.reserve(inliers.size());
-            img_in.reserve(inliers.size());
+            auto &obj_in = scratch_.obj_in;
+            auto &img_in = scratch_.img_in;
+            obj_in.resize(inliers.size());
+            img_in.resize(inliers.size());
 
             for (int j : inliers)
             {
@@ -272,8 +276,8 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     const auto &pr = tracks_buffer_.pr();
     const auto &has_r = tracks_buffer_.hasRight();
 
-    std::vector<cv::Point3f> X_curr;
-    std::vector<uint8_t> valid_X;
+    auto &X_curr = scratch_.X_curr;
+    auto &valid_X = scratch_.valid_X;
     X_curr.resize(N);
     valid_X.resize(N);
 
@@ -307,16 +311,17 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     ///  top up features
 
     // build CPU mask around survivors
-    cv::Mat cpu_mask = buildExclusionMask(d_gray8_left_.size(), tracks_buffer_.pl(), 6.0); // TODO: make exclusion radius a param
-    d_mask_.upload(cpu_mask);
+    scratch_.cpu_mask.setTo(255);
+    buildExclusionMask(d_gray8_left_.size(), tracks_buffer_.pl(), 6.0, scratch_.cpu_mask); // TODO: make exclusion radius a param
+    d_mask_.upload(scratch_.cpu_mask);
 
-    std::vector<cv::Point2f> new_pts;
+    auto &new_pts = scratch_.new_pts;
     int need_i = (int)params_.target_features - (int)tracks_buffer_.size();
     if (need_i < 0)
         need_i = 0;
     uint16_t need = (uint16_t)need_i;
 
-    new_pts.reserve(need);
+    new_pts.resize(need);
     // std::cout << "need new features: " << need << std::endl;
     feature_detector_.detect(d_gray8_left_, d_mask_, new_pts, need);
 
@@ -438,7 +443,10 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     /// SECTION - UPDATE BUFFERS
     ///
 
-    d_gray8_left_prev_ = d_gray8_left_.clone();
+    d_gray8_left_prev_.create(d_gray8_left_.size(), d_gray8_left_.type());
+    d_gray8_left_.copyTo(d_gray8_left_prev_, stream_);
+
+    scratch_.clearPerFrame();
 
     return output;
 }
@@ -491,7 +499,8 @@ bool VisualInertial::tryFinalizeOne()
         if (!pending_kfs_.empty() && pending_kfs_.front().kf_id == ev.kf_id)
             pending_kfs_.pop_front();
         ready_kfs_.push_back(std::move(ev));
-        while (ready_kfs_.size() > params_.kf_ready_queue_max) ready_kfs_.pop_front();
+        while (ready_kfs_.size() > params_.kf_ready_queue_max)
+            ready_kfs_.pop_front();
 
         have_last_finalized_ = true;
         last_finalized_kf_id_ = ready_kfs_.back().kf_id;
@@ -507,7 +516,7 @@ bool VisualInertial::tryFinalizeOne()
     const double t0 = ev.t_start;
     const double t1 = ev.t_end;
 
-    const bool ids_ok   = (ev.kf_id == prev_id + 1);
+    const bool ids_ok = (ev.kf_id == prev_id + 1);
     const bool times_ok = (std::abs(t0 - last_finalized_t_end_) < 1e-3) && (t1 > t0);
 
     if (!ids_ok || !times_ok)
@@ -520,15 +529,16 @@ bool VisualInertial::tryFinalizeOne()
         if (!pending_kfs_.empty() && pending_kfs_.front().kf_id == ev.kf_id)
             pending_kfs_.pop_front();
         ready_kfs_.push_back(std::move(ev));
-        while (ready_kfs_.size() > params_.kf_ready_queue_max) ready_kfs_.pop_front();
+        while (ready_kfs_.size() > params_.kf_ready_queue_max)
+            ready_kfs_.pop_front();
 
         last_finalized_kf_id_ = ready_kfs_.back().kf_id;
         last_finalized_t_end_ = ready_kfs_.back().t_end;
 
         std::cout << std::fixed << std::setprecision(6)
                   << "[KFfinal] chain break: kf_id=" << last_finalized_kf_id_
-                  << " ids_ok=" << (ids_ok?1:0)
-                  << " times_ok=" << (times_ok?1:0)
+                  << " ids_ok=" << (ids_ok ? 1 : 0)
+                  << " times_ok=" << (times_ok ? 1 : 0)
                   << " t0=" << t0
                   << " last_t_end=" << last_finalized_t_end_
                   << " t1=" << t1 << "\n";
@@ -569,7 +579,8 @@ bool VisualInertial::tryFinalizeOne()
             pending_kfs_.pop_front();
 
         ready_kfs_.push_back(std::move(ev));
-        while (ready_kfs_.size() > params_.kf_ready_queue_max) ready_kfs_.pop_front();
+        while (ready_kfs_.size() > params_.kf_ready_queue_max)
+            ready_kfs_.pop_front();
 
         last_finalized_kf_id_ = ready_kfs_.back().kf_id;
         last_finalized_t_end_ = ready_kfs_.back().t_end;
