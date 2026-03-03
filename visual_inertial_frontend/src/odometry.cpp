@@ -13,6 +13,48 @@
 
 #include "visual_inertial_frontend/odometry.hpp"
 
+#include <chrono>
+#include <iostream>
+#include <string>
+#include <unordered_map>
+
+static inline void buildExclusionMaskDownsampledCPU(
+    const cv::Size &full_sz,
+    const std::vector<cv::Point2f> &keep,
+    int scale,
+    cv::Mat &mask_small,
+    cv::Mat &mask_full)
+{
+    const int sw = (full_sz.width + scale - 1) / scale;
+    const int sh = (full_sz.height + scale - 1) / scale;
+
+    // allocate if needed
+    if (mask_small.empty() || mask_small.cols != sw || mask_small.rows != sh)
+        mask_small.create(sh, sw, CV_8U);
+    if (mask_full.empty() || mask_full.size() != full_sz)
+        mask_full.create(full_sz, CV_8U);
+
+    // start with all allowed (255) in small mask
+    mask_small.setTo(255);
+
+    // mark occupied cells as forbidden (0)
+    for (const auto &p : keep)
+    {
+        const int x = (int)p.x;
+        const int y = (int)p.y;
+        if ((unsigned)x >= (unsigned)full_sz.width || (unsigned)y >= (unsigned)full_sz.height)
+            continue;
+
+        const int sx = x / scale;
+        const int sy = y / scale;
+        if ((unsigned)sx < (unsigned)sw && (unsigned)sy < (unsigned)sh)
+            mask_small.at<uint8_t>(sy, sx) = 0;
+    }
+
+    // upsample to full res with nearest neighbor (keeps 0/255 values)
+    cv::resize(mask_small, mask_full, full_sz, 0, 0, cv::INTER_NEAREST);
+}
+
 // Inputs: pl[i], pr[i] in pixels (rectified); intrinsics fx, fy, cx, cy; baseline B (meters)
 bool triangulateRectified(
     const cv::Point2f &pl, const cv::Point2f &pr,
@@ -40,23 +82,6 @@ VisualInertial::VisualInertial(const Params &p)
       tracker_spatial_(&stream_),
       imu_preint_()
 {
-}
-
-static inline void buildExclusionMask(const cv::Size &sz,
-                                      const std::vector<cv::Point2f> &keep,
-                                      int radius_px,
-                                      cv::Mat &mask)
-{
-    if (radius_px <= 0 || keep.empty())
-        return;
-    for (const auto &p : keep)
-    {
-        // skip points outside (paranoia)
-        if (p.x < 0 || p.y < 0 || p.x >= sz.width || p.y >= sz.height)
-            continue;
-        cv::circle(mask, p, radius_px, cv::Scalar(0), -1, cv::LINE_AA);
-    }
-    return;
 }
 
 void VisualInertial::processImu(const ImuSample &sample)
@@ -92,10 +117,12 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         d_gray8_left_prev_ = d_gray8_left_.clone();
         return output;
     }
+
     // Upload both frames to device
     d_gray8_left_.upload(gray8_left, stream_);
     d_gray8_right_.upload(gray8_right, stream_);
     //
+
     tracks_buffer_.beginFrame();
 
     // get current tracks from buffer
@@ -104,7 +131,6 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     ///
     /// SECTION - Temporal tracking (FW+BW pass)
     ///
-
     // temporal feature tracking previous frame -> current frame
     auto &pts_fw = scratch_.pts_fw;
     auto &status_fw = scratch_.status_fw;
@@ -136,10 +162,9 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
     // apply the gating
     tracks_buffer_.applyKeepMask(status_fb); // stable compaction
-
-    ///
-    /// SECTION -  Spatial/stereo tracking
-    ///
+                                             ///
+                                             /// SECTION -  Spatial/stereo tracking
+                                             ///
 
     // spatial/cross camera feature tracking: left -> right  + backward pass
     auto &pts_fw_stereo = scratch_.pts_fw_stereo;
@@ -222,8 +247,8 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         {
             auto &obj_in = scratch_.obj_in;
             auto &img_in = scratch_.img_in;
-            obj_in.resize(inliers.size());
-            img_in.resize(inliers.size());
+            obj_in.reserve(inliers.size());
+            img_in.reserve(inliers.size());
 
             for (int j : inliers)
             {
@@ -269,7 +294,6 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     ///
     /// SECTION - TRIANGULATE AND UPDATE DB
     ///
-
     // re triangulate points in local frame and update DB
     const size_t N = tracks_buffer_.size();
     const auto &pl = tracks_buffer_.pl();
@@ -305,28 +329,37 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     tracks_buffer_.setPrev3DAll(X_curr, &valid_X);
 
     tracks_buffer_.applyKeepMask(valid_X); // drops those without valid 3D
-
-    ///
-    /// SECTION - TOPUP
-    ///  top up features
+                                           ///
+                                           /// SECTION - TOPUP
+                                           ///  top up features
 
     // build CPU mask around survivors
-    scratch_.cpu_mask.setTo(255);
-    buildExclusionMask(d_gray8_left_.size(), tracks_buffer_.pl(), 6.0, scratch_.cpu_mask); // TODO: make exclusion radius a param
-    d_mask_.upload(scratch_.cpu_mask);
-
-    auto &new_pts = scratch_.new_pts;
     int need_i = (int)params_.target_features - (int)tracks_buffer_.size();
     if (need_i < 0)
         need_i = 0;
-    uint16_t need = (uint16_t)need_i;
+    const uint16_t need = (uint16_t)need_i;
 
-    new_pts.resize(need);
-    // std::cout << "need new features: " << need << std::endl;
-    feature_detector_.detect(d_gray8_left_, d_mask_, new_pts, need);
+    if (need > 0)
+    {
+        buildExclusionMaskDownsampledCPU(
+            d_gray8_left_.size(),
+            tracks_buffer_.pl(),
+            mask_scale_,
+            mask_small_cpu_,
+            mask_full_cpu_);
 
-    tracks_buffer_.addNewLeft(new_pts);
+        // Upload on the same stream to avoid sync jitter
+        d_mask_.upload(mask_full_cpu_, stream_);
 
+        auto &new_pts = scratch_.new_pts;
+        new_pts.clear();
+        new_pts.reserve(need);
+
+        feature_detector_.detect(d_gray8_left_, d_mask_, new_pts, need);
+
+        if (!new_pts.empty())
+            tracks_buffer_.addNewLeft(new_pts);
+    }
     //
     // SECTION - KEYFRAME EVALUATION AND CREATION
     //

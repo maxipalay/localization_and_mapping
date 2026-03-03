@@ -219,4 +219,9 @@ private:
         }
     };
     Scratch scratch_;
+
+    // Mask buffers
+    cv::Mat mask_small_cpu_;
+    cv::Mat mask_full_cpu_; // full-res CPU mask
+    int mask_scale_ = 20;
 };
