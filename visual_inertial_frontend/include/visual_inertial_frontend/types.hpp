@@ -9,9 +9,9 @@ struct FrameResult
     Eigen::Isometry3d vo_pose_abs = Eigen::Isometry3d::Identity();
     Eigen::Isometry3d vo_pose_rel = Eigen::Isometry3d::Identity();
 
-    bool kf_valid = false;
-    KeyframeEvent kf;
-
+    bool kf_trigger = false;
+    double stamp;
+    
     cv::Mat debug_viz;
 };
 

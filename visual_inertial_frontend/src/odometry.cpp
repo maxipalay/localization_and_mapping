@@ -94,6 +94,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
                                           const cv::Mat &gray8_right, double stamp)
 {
     FrameResult output;
+    output.stamp = stamp;
 
     // check our calibration is valid, if not return
     if (!calibration_.valid())
@@ -400,7 +401,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         // 4) Inform policy that the keyframe was accepted/created
         //    (policy stores last-kf pose/time + last-kf ids for overlap logic)
         keyframe_policy_.onKeyframeCreated(ev.kf_id, ev.t_end, vo_pose_abs_, ev.ids);
-        output.kf_valid = true;
+        output.kf_trigger = true;
 
         // Right before buildAndConsume(...)
         std::cout << std::fixed << std::setprecision(6)
@@ -419,26 +420,6 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
         ev.pim_bytes.clear();
         ev.has_imu = false;
-        // Build + consume IMU preintegration for (t0, t1]
-        // auto pkt_opt = imu_preint_.buildAndConsume(prev_kf_id_, ev.t_start, ev.kf_id, ev.t_end);
-
-        // if (!pkt_opt || !pkt_opt->valid)
-        // {
-        //     std::cout << "aaa" << std::endl;
-        //     // MVP behavior: still publish KF but mark IMU invalid / empty.
-        //     // You can also choose to skip KF emission if you want.
-        //     ev.pim_bytes.clear();
-        //     ev.has_imu = false;
-        // }
-        // else
-        // {
-        //     ev.pim_bytes = pkt_opt->bytes; // or pkt_opt->pim_bytes depending on your struct
-        //     ev.has_imu = true;
-        // }
-
-        // output.kf = ev;
-        ev.has_imu = false;
-        ev.pim_bytes.clear();
 
         // instead of building IMU here:
         submitPendingKeyframe_(std::move(ev));
