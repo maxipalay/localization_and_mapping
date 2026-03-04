@@ -1,16 +1,58 @@
-# visual_inertial_lib
+# TODO
 
-- feature_detector - encapsulation of feature detector
-- feature_tracker - encapsulation of feature tracker
-- tracks_buffer - a buffer that holds tracks frame-to-frame. Useful for pnp and keyframe generation
-- keyframe_policy - the policy which defines when we should make a keyframe
-- odometry - our main API, holds VisualInertial
-- tracking_pipeline - logic related to visual features tracking
-- imu_pipeline - logic related to handling of IMU data
-- types - definition of any custom types
+- expose parameters on a single unified params file
+- work on estimating camera<->IMU offset
+- filter-based fast prediction
 
-# visual_inertial_optimization
+## Feature tracking and distribution
+- Grid-based / cell-balanced top-up (prefer empty regions, newly visible FOV areas). You tried it; a bit slower; stashed as a potential upgrade.
 
-- keyframe_buffer - holds last K keyframes to be used in optimization
-- optimizer - encapsulates the GTSAM optimizer
-- odometry_optimization - our main API for optimization
+- Track age / score / stability: prefer older tracks for PnP and keyframe overlap; drop flaky tracks sooner.
+
+- Adaptive feature budget: target more features in low texture, fewer in high texture (keeps compute stable).
+
+
+## Gating and measurement quality
+
+- Better PnP health metrics: compute and log reprojection RMSE, inlier ratio, and failure reasons.
+
+- Make PnP more deterministic: refine only when inliers are strong; adapt RANSAC iterations.
+
+
+## Keyframes and frontend policy
+
+- Keyframe policy tuned for parallax, not just time: avoid KF spam when stationary.
+
+- Better chaining when KFs drop: tolerate gaps or enforce strictness + auto-reset.
+
+## Backend optimization
+
+- Robust noise models (Huber/Cauchy on stereo factors) and/or tune noise params.
+
+- Residual-based pruning/downweighting of bad landmark observations.
+
+## Landmark lifecycle rules:
+
+- don’t trust/init until seen in multiple KFs (or sufficient parallax)
+
+- Window tuning (KF count, lag) vs compute.
+
+## IMU / timing robustness
+
+- Clean up camera–IMU time offset estimation (remove “coverage margin” hacks).
+
+- Optional gyro-only prediction as a PnP initial guess / degraded mode (low effort, moderate benefit).
+
+## Reliability, recovery, diagnostics
+
+- Degraded mode: when tracking/PnP is bad, stop updating pose, keep tracking, or reset gracefully.
+
+- Backend exception recovery: catch smoother failures, reset window, continue from last good.
+
+- Publish a “health” topic:
+
+    - tracks alive, stereo-valid count, pnp inliers, rmse
+
+## Visualization and debugging
+
+- Other useful vizualization tools
