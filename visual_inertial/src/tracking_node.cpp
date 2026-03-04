@@ -27,7 +27,8 @@
 #include <cmath>
 #include <Eigen/Geometry>
 
-#include "visual_inertial/msg/imu_bias.hpp"
+#include <visual_inertial/msg/imu_bias.hpp>
+#include <visual_inertial/msg/tracks.hpp>
 
 static inline geometry_msgs::msg::Quaternion R_to_quat(const cv::Matx33d &R)
 {
@@ -101,9 +102,9 @@ public:
         input_topic_right_ = declare_parameter<std::string>("input_topic_right", "/oak/right/image_rect");
         left_info_t = declare_parameter<std::string>("left/camera_info", "/oak/left/camera_info");
         right_info_t = declare_parameter<std::string>("right/camera_info", "/oak/right/camera_info");
+        tracks_topic_ = declare_parameter<std::string>("tracks_topic", "/tracks");
 
         transport_ = declare_parameter<std::string>("transport", "compressed"); // or "raw"
-        output_topic_ = declare_parameter<std::string>("output_topic", "/camera/image_features");
 
         int queue = declare_parameter<int>("queue_size", 3);
 
@@ -112,8 +113,7 @@ public:
         double age_penalty = declare_parameter<double>("age_penalty", 0.0);      // 0 = prefer closest stamps
 
         // Publishers
-        it_pub_ = image_transport::create_publisher(
-            this, output_topic_, rmw_qos_profile_sensor_data);
+        tracks_pub_ = create_publisher<visual_inertial::msg::Tracks>(tracks_topic_, rclcpp::SensorDataQoS());
 
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
@@ -187,17 +187,15 @@ public:
 private:
     bool vo_calibrated_{false};
 
-    // params/state
-    std::string output_topic_;
-
     // member:
     std::unique_ptr<VisualInertial> visual_inertial_;
-    image_transport::Publisher it_pub_;
 
     rclcpp::Publisher<visual_inertial::msg::Keyframe>::SharedPtr kf_pub_;
+    rclcpp::Publisher<visual_inertial::msg::Tracks>::SharedPtr tracks_pub_;
 
     std::string input_topic_left_, input_topic_right_, transport_;
     std::string left_info_t, right_info_t;
+    std::string tracks_topic_;
 
     // image subscribers
     image_transport::SubscriberFilter sub_left_{}, sub_right_{};
@@ -329,12 +327,6 @@ private:
 
         auto result = visual_inertial_->processStereo(left_cv->image, right_cv->image, t_curr);
 
-        if (!result.debug_viz.empty())
-        {
-            auto out_msg = cv_bridge::CvImage(left_msg->header, "bgr8", result.debug_viz).toImageMsg();
-            it_pub_.publish(out_msg);
-        }
-
         geometry_msgs::msg::TransformStamped tf_msg;
         tf_msg.header.stamp = left_msg->header.stamp;
         tf_msg.header.frame_id = parent_frame_;
@@ -365,6 +357,22 @@ private:
         tf_msg.transform.rotation.y = q.y();
         tf_msg.transform.rotation.z = q.z();
         tf_broadcaster_->sendTransform(tf_msg);
+
+        visual_inertial::msg::Tracks tracks_msg;
+        tracks_msg.header.stamp = left_msg->header.stamp;
+
+        const auto N = result.tracks.size();
+        tracks_msg.u_l.resize(N);
+        tracks_msg.v_l.resize(N);
+
+        for (size_t i = 0; i < N; ++i)
+        {
+            tracks_msg.u_l[i] = result.tracks[i].x;
+            tracks_msg.v_l[i] = result.tracks[i].y;
+        }
+
+        tracks_pub_->publish(tracks_msg);
+
 
         auto t1 = std::chrono::steady_clock::now();
         double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();

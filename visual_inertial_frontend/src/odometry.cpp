@@ -329,10 +329,16 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     // Store as "prev 3D" for next frame's PnP
     tracks_buffer_.setPrev3DAll(X_curr, &valid_X);
 
+    
     tracks_buffer_.applyKeepMask(valid_X); // drops those without valid 3D
-                                           ///
-                                           /// SECTION - TOPUP
-                                           ///  top up features
+    
+    // add the tracks up to this point to the output, these are the tracks that helped steer the current update
+    // these tracks we born at least on the last frame, and passed our temporal + stereo gates, and the pnp gate
+    output.tracks = tracks_buffer_.pl();
+
+    ///
+    /// SECTION - TOPUP
+    ///  top up features
 
     // build CPU mask around survivors
     int need_i = (int)params_.target_features - (int)tracks_buffer_.size();
@@ -435,18 +441,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         std::cout << keyframeDecisionDebugLine(dec) << "\n";
     }
 
-    ///
-    /// SECTION - DRAW RESULTS
-    ///
-    cv::Mat result_left_tracking_after_stereo;
-    cv::cvtColor(gray8_left, result_left_tracking_after_stereo, cv::COLOR_GRAY2BGR);
-
-    for (size_t i = 0; i < tracks_buffer_.size(); i++)
-    {
-        circle(result_left_tracking_after_stereo, tracks_buffer_.pl()[i], 2, {0, 255, 0}, -1, cv::LINE_AA);
-    }
-
-    output.debug_viz = result_left_tracking_after_stereo;
+    // SECTION - FILL OUTPUT POSE ABS
 
     const Eigen::Isometry3d T_BC = params_.T_BC; ///* your calibrated Body<-CamOptical (rot+trans) */;
     const Eigen::Isometry3d T_CB = T_BC.inverse();

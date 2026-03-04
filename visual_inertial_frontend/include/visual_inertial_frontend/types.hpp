@@ -11,8 +11,8 @@ struct FrameResult
 
     bool kf_trigger = false;
     double stamp;
-    
-    cv::Mat debug_viz;
+
+    std::vector<cv::Point2f> tracks; // left camera tracks
 };
 
 // IMU sample in IMU frame (or "body").

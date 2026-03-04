@@ -26,10 +26,14 @@ find_package(eigen3_cmake_module REQUIRED)
 add_executable(tracking_node src/tracking_node.cpp)
 add_executable(optimization_node src/optimization_node.cpp)
 add_executable(path_viz_node src/path_viz_node.cpp)
+add_executable(tracks_viz_node src/tracks_viz_node.cpp)
 
 # Pull include dirs/defs from deps (including your lib)
 ament_target_dependencies(tracking_node
   rclcpp sensor_msgs cv_bridge image_transport OpenCV visual_inertial_frontend visual_inertial_common tf2_ros)
+
+ament_target_dependencies(tracks_viz_node
+  rclcpp sensor_msgs cv_bridge image_transport OpenCV)
 
 ament_target_dependencies(optimization_node
   rclcpp sensor_msgs visual_inertial_common visual_inertial_optimization tf2_ros)
@@ -48,18 +52,19 @@ target_link_libraries(optimization_node
   TBB::tbb
 )
 
-install(TARGETS tracking_node optimization_node path_viz_node
+install(TARGETS tracking_node optimization_node path_viz_node tracks_viz_node
   RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Keyframe.msg"
   "msg/ImuBias.msg"
+  "msg/Tracks.msg"
   DEPENDENCIES builtin_interfaces sensor_msgs geometry_msgs
 )
 
 rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_typesupport_cpp")
 target_link_libraries(tracking_node "${cpp_typesupport_target}")
-
+target_link_libraries(tracks_viz_node "${cpp_typesupport_target}")
 target_link_libraries(optimization_node "${cpp_typesupport_target}")
 
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
