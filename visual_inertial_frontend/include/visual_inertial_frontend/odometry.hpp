@@ -44,6 +44,22 @@ public:
         double imu_coverage_margin_s = 0.05;
         size_t kf_ready_queue_max = 30;
         size_t kf_pending_queue_max = 30;
+
+        // Mask generation for top-up; higher = coarser blocks
+        int mask_scale = 20;
+
+        // PnP tuning
+        int pnp_iterations_count = 100;
+        float pnp_reproj_error_px = 2.0f;
+        double pnp_confidence = 0.999;
+        int pnp_refine_max_iters = 30;
+        double pnp_refine_eps = 1e-6;
+
+        // Keyframe policy configuration
+        KeyframePolicy::Config kf_policy_cfg{};
+
+        // IMU preintegration configuration
+        ImuPreintegratorConfig imu_cfg{};
     };
 
     VisualInertial()
@@ -223,5 +239,4 @@ private:
     // Mask buffers
     cv::Mat mask_small_cpu_;
     cv::Mat mask_full_cpu_; // full-res CPU mask
-    int mask_scale_ = 20;
 };

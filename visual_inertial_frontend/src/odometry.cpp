@@ -80,7 +80,8 @@ VisualInertial::VisualInertial(const Params &p)
       feature_detector_(FeatureDetector::Params{}, &stream_),
       tracker_temporal_(&stream_),
       tracker_spatial_(&stream_),
-      imu_preint_()
+      keyframe_policy_(p.kf_policy_cfg),
+      imu_preint_(p.imu_cfg)
 {
 }
 
@@ -224,9 +225,9 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         cv::Mat rvec, tvec;
         auto &inliers = scratch_.inliers;
 
-        const int iterationsCount = 100;  // TODO tune
-        const float reprojErrorPx = 2.0f; // TODO tune
-        const double confidence = 0.999;
+        const int iterationsCount = params_.pnp_iterations_count;
+        const float reprojErrorPx = params_.pnp_reproj_error_px;
+        const double confidence = params_.pnp_confidence;
 
         cv::Matx33d K_left(
             calibration_.left.K(0, 0), calibration_.left.K(0, 1), calibration_.left.K(0, 2),
@@ -257,7 +258,9 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
                 img_in.push_back(image_pts[(size_t)j]);
             }
 
-            cv::TermCriteria crit(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, 1e-6); // TODO tune
+            cv::TermCriteria crit(cv::TermCriteria::COUNT + cv::TermCriteria::EPS,
+                                  params_.pnp_refine_max_iters,
+                                  params_.pnp_refine_eps);
             cv::solvePnPRefineLM(obj_in, img_in, K_left, cv::Mat(), rvec, tvec, crit);
         }
 
@@ -351,7 +354,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         buildExclusionMaskDownsampledCPU(
             d_gray8_left_.size(),
             tracks_buffer_.pl(),
-            mask_scale_,
+            params_.mask_scale,
             mask_small_cpu_,
             mask_full_cpu_);
 

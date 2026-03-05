@@ -167,15 +167,51 @@ public:
         cfg_.window_size = static_cast<size_t>(declare_parameter<int>("window_size", 8));
         cfg_.stereo_sigma_px = declare_parameter<double>("stereo_sigma_px", 1.0);
 
-        cfg_.prior_rot_sigma_rad = declare_parameter<double>("prior_rot_sigma_rad", 5.0 * M_PI / 180.0);
-        cfg_.prior_trans_sigma_m = declare_parameter<double>("prior_trans_sigma_m", 0.25);
+        cfg_.prior_rot_sigma_rad = declare_parameter<double>("prior_rot_sigma_rad", cfg_.prior_rot_sigma_rad);
+        cfg_.prior_trans_sigma_m = declare_parameter<double>("prior_trans_sigma_m", cfg_.prior_trans_sigma_m);
 
-        cfg_.use_vo_between = declare_parameter<bool>("use_vo_between", true);
-        cfg_.between_rot_sigma_rad = declare_parameter<double>("between_rot_sigma_rad", 3.0 * M_PI / 180.0);
-        cfg_.between_trans_sigma_m = declare_parameter<double>("between_trans_sigma_m", 0.10);
+        cfg_.vel_prior_sigma = declare_parameter<double>("vel_prior_sigma", cfg_.vel_prior_sigma);
+        cfg_.bias_acc_prior_sigma = declare_parameter<double>("bias_acc_prior_sigma", cfg_.bias_acc_prior_sigma);
+        cfg_.bias_gyro_prior_sigma = declare_parameter<double>("bias_gyro_prior_sigma", cfg_.bias_gyro_prior_sigma);
+
+        cfg_.use_vo_between = declare_parameter<bool>("use_vo_between", cfg_.use_vo_between);
+        cfg_.between_rot_sigma_rad = declare_parameter<double>("between_rot_sigma_rad", cfg_.between_rot_sigma_rad);
+        cfg_.between_trans_sigma_m = declare_parameter<double>("between_trans_sigma_m", cfg_.between_trans_sigma_m);
+
+        cfg_.use_imu = declare_parameter<bool>("use_imu", cfg_.use_imu);
 
         cfg_.init_landmarks_from_stereo = declare_parameter<bool>("init_landmarks_from_stereo", true);
         cfg_.prune_unobserved_landmarks = declare_parameter<bool>("prune_unobserved_landmarks", true);
+
+        // Optional override for body<-camera extrinsics
+        Eigen::Quaterniond q_default(cfg_.T_BC.rotation());
+        q_default.normalize();
+        auto t_bc = declare_parameter<std::vector<double>>(
+            "T_BC_translation", {cfg_.T_BC.translation().x(),
+                                 cfg_.T_BC.translation().y(),
+                                 cfg_.T_BC.translation().z()});
+        auto q_bc_xyzw = declare_parameter<std::vector<double>>(
+            "T_BC_quaternion_xyzw", {q_default.x(), q_default.y(), q_default.z(), q_default.w()});
+        if (t_bc.size() == 3 && q_bc_xyzw.size() == 4)
+        {
+            Eigen::Quaterniond q(q_bc_xyzw[3], q_bc_xyzw[0], q_bc_xyzw[1], q_bc_xyzw[2]);
+            if (q.norm() > 1e-9)
+            {
+                q.normalize();
+                Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+                T.linear() = q.toRotationMatrix();
+                T.translation() = Eigen::Vector3d(t_bc[0], t_bc[1], t_bc[2]);
+                cfg_.T_BC = T;
+            }
+            else
+            {
+                RCLCPP_WARN(get_logger(), "T_BC quaternion has near-zero norm; using default extrinsics");
+            }
+        }
+        else
+        {
+            RCLCPP_WARN(get_logger(), "T_BC params malformed (need 3 translation + 4 quaternion entries); using defaults");
+        }
 
         max_queue_ = static_cast<size_t>(declare_parameter<int>("max_keyframe_queue", 30));
 
@@ -258,6 +294,12 @@ public:
             std::chrono::duration<double>(1.0 / std::max(1e-6, lm_pub_hz_)),
             [this]()
             { this->publishLandmarksPointCloud_(); });
+
+        // Optional smoothing params for TF and landmark caching
+        smooth_tau_s_ = declare_parameter<double>("smooth_tau_s", smooth_tau_s_);
+        publish_tf_hz_ = declare_parameter<double>("publish_tf_hz", publish_tf_hz_);
+        lm_cache_max_ = static_cast<size_t>(declare_parameter<int>("lm_cache_max", static_cast<int>(lm_cache_max_)));
+        lm_fetch_max_ = static_cast<size_t>(declare_parameter<int>("lm_fetch_max", static_cast<int>(lm_fetch_max_)));
     }
 
     ~OptimizationNode() override

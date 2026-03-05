@@ -68,5 +68,6 @@ target_link_libraries(tracks_viz_node "${cpp_typesupport_target}")
 target_link_libraries(optimization_node "${cpp_typesupport_target}")
 
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
+install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
 
 ament_package()

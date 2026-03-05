@@ -10,6 +10,7 @@
 #include <sstream>
 #include <iomanip>
 #include <limits>
+#include <vector>
 
 #include "visual_inertial_frontend/types.hpp"
 #include "visual_inertial_frontend/odometry.hpp"
@@ -121,7 +122,92 @@ public:
         parent_frame_ = this->declare_parameter<std::string>("parent_frame_id", "odom");
         child_frame_ = this->declare_parameter<std::string>("child_frame_id", "body");
 
-        visual_inertial_ = std::make_unique<VisualInertial>();
+        // Build VisualInertial params from ROS parameters
+        VisualInertial::Params vi_params;
+
+        vi_params.target_features = static_cast<uint16_t>(declare_parameter<int>(
+            "target_features", static_cast<int>(vi_params.target_features)));
+        vi_params.stereo_epi_eps_y = declare_parameter<double>(
+            "stereo_epi_eps_y", vi_params.stereo_epi_eps_y);
+        vi_params.stereo_disp_min = declare_parameter<double>(
+            "stereo_disp_min", vi_params.stereo_disp_min);
+        vi_params.stereo_disp_max = declare_parameter<double>(
+            "stereo_disp_max", vi_params.stereo_disp_max);
+        vi_params.fb_thr2 = declare_parameter<double>("fb_thr2", vi_params.fb_thr2);
+
+        vi_params.imu_coverage_margin_s = declare_parameter<double>(
+            "imu_coverage_margin_s", vi_params.imu_coverage_margin_s);
+        vi_params.kf_ready_queue_max = static_cast<size_t>(declare_parameter<int>(
+            "kf_ready_queue_max", static_cast<int>(vi_params.kf_ready_queue_max)));
+        vi_params.kf_pending_queue_max = static_cast<size_t>(declare_parameter<int>(
+            "kf_pending_queue_max", static_cast<int>(vi_params.kf_pending_queue_max)));
+        vi_params.mask_scale = declare_parameter<int>("mask_scale", vi_params.mask_scale);
+        vi_params.pnp_iterations_count = declare_parameter<int>(
+            "pnp_iterations_count", vi_params.pnp_iterations_count);
+        vi_params.pnp_reproj_error_px = static_cast<float>(declare_parameter<double>(
+            "pnp_reproj_error_px", static_cast<double>(vi_params.pnp_reproj_error_px)));
+        vi_params.pnp_confidence = declare_parameter<double>(
+            "pnp_confidence", vi_params.pnp_confidence);
+        vi_params.pnp_refine_max_iters = declare_parameter<int>(
+            "pnp_refine_max_iters", vi_params.pnp_refine_max_iters);
+        vi_params.pnp_refine_eps = declare_parameter<double>(
+            "pnp_refine_eps", vi_params.pnp_refine_eps);
+
+        // Keyframe policy tuning
+        auto &kfcfg = vi_params.kf_policy_cfg;
+        kfcfg.min_kf_dt_s = declare_parameter<double>("kf_min_dt_s", kfcfg.min_kf_dt_s);
+        kfcfg.max_kf_dt_s = declare_parameter<double>("kf_max_dt_s", kfcfg.max_kf_dt_s);
+        kfcfg.min_trans_m = declare_parameter<double>("kf_min_trans_m", kfcfg.min_trans_m);
+        kfcfg.min_rot_deg = declare_parameter<double>("kf_min_rot_deg", kfcfg.min_rot_deg);
+        kfcfg.min_tracks = declare_parameter<int>("kf_min_tracks", kfcfg.min_tracks);
+        kfcfg.min_shared_tracks = declare_parameter<int>("kf_min_shared_tracks", kfcfg.min_shared_tracks);
+        kfcfg.min_shared_ratio = declare_parameter<double>("kf_min_shared_ratio", kfcfg.min_shared_ratio);
+        kfcfg.force_kf_on_max_interval = declare_parameter<bool>("kf_force_on_max_interval", kfcfg.force_kf_on_max_interval);
+        kfcfg.allow_early_kf_on_quality_drop = declare_parameter<bool>("kf_allow_early_on_quality_drop", kfcfg.allow_early_kf_on_quality_drop);
+
+        // IMU preintegration params
+        auto &imucfg = vi_params.imu_cfg;
+        imucfg.gyro_noise_density = declare_parameter<double>("imu_gyro_noise_density", imucfg.gyro_noise_density);
+        imucfg.accel_noise_density = declare_parameter<double>("imu_accel_noise_density", imucfg.accel_noise_density);
+        imucfg.gyro_bias_rw = declare_parameter<double>("imu_gyro_bias_rw", imucfg.gyro_bias_rw);
+        imucfg.accel_bias_rw = declare_parameter<double>("imu_accel_bias_rw", imucfg.accel_bias_rw);
+        imucfg.gravity_mps2 = declare_parameter<double>("imu_gravity_mps2", imucfg.gravity_mps2);
+        imucfg.max_buffer_s = declare_parameter<double>("imu_max_buffer_s", imucfg.max_buffer_s);
+        imucfg.keep_anchor = declare_parameter<bool>("imu_keep_anchor", imucfg.keep_anchor);
+
+        // Optional override for body<-camera extrinsics
+        Eigen::Quaterniond q_default(vi_params.T_BC.rotation());
+        q_default.normalize();
+
+        auto t_bc = declare_parameter<std::vector<double>>(
+            "T_BC_translation", {vi_params.T_BC.translation().x(),
+                                   vi_params.T_BC.translation().y(),
+                                   vi_params.T_BC.translation().z()});
+        auto q_bc_xyzw = declare_parameter<std::vector<double>>(
+            "T_BC_quaternion_xyzw", {q_default.x(), q_default.y(), q_default.z(), q_default.w()});
+
+        if (t_bc.size() == 3 && q_bc_xyzw.size() == 4)
+        {
+            Eigen::Quaterniond q(q_bc_xyzw[3], q_bc_xyzw[0], q_bc_xyzw[1], q_bc_xyzw[2]);
+            if (q.norm() > 1e-9)
+            {
+                q.normalize();
+                Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+                T.linear() = q.toRotationMatrix();
+                T.translation() = Eigen::Vector3d(t_bc[0], t_bc[1], t_bc[2]);
+                vi_params.T_BC = T;
+            }
+            else
+            {
+                RCLCPP_WARN(get_logger(), "T_BC quaternion has near-zero norm; using default extrinsics");
+            }
+        }
+        else
+        {
+            RCLCPP_WARN(get_logger(), "T_BC params malformed (need 3 translation + 4 quaternion entries); using defaults");
+        }
+
+        visual_inertial_ = std::make_unique<VisualInertial>(vi_params);
 
         // Subscribe with transport string + QoS (Humble API)
         sub_left_.subscribe(this, input_topic_left_, transport_, rmw_qos_profile_sensor_data);
