@@ -14,6 +14,8 @@
 #include "visual_inertial_frontend/odometry.hpp"
 
 #include <chrono>
+#include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <unordered_map>
@@ -213,9 +215,12 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
     tracks_buffer_.gatherPnP(object_pts, image_pts, &buf_idx);
 
-    int pnp_corresp = (int)object_pts.size();
     if (object_pts.size() < 6)
         std::cout << "[PNP] not enough points!" << std::endl;
+
+    bool have_pose_update = false;
+    const Eigen::Isometry3d pose_prev = vo_pose_abs_;
+    Eigen::Isometry3d T_Ck_Cref = Eigen::Isometry3d::Identity();
 
     if (object_pts.size() >= 6)
     {
@@ -243,12 +248,16 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
             cv::SOLVEPNP_AP3P);
 
         if (!ok || inliers.size() < 6)
-            std::cout << "[PNP] Error!" << std::endl;
-
-        // Refine using LM on inliers
         {
+            std::cout << "[PNP] Error!" << std::endl;
+        }
+        else
+        {
+            // Refine using LM on inliers.
             auto &obj_in = scratch_.obj_in;
             auto &img_in = scratch_.img_in;
+            obj_in.clear();
+            img_in.clear();
             obj_in.reserve(inliers.size());
             img_in.reserve(inliers.size());
 
@@ -262,19 +271,15 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
                                   params_.pnp_refine_max_iters,
                                   params_.pnp_refine_eps);
             cv::solvePnPRefineLM(obj_in, img_in, K_left, cv::Mat(), rvec, tvec, crit);
-        }
 
-        auto pnp_inliers = (int)inliers.size();
+            // -----------------------------
+            // 5) Gate DB based on PnP inliers (B-style: drop eligible outliers only)
+            // -----------------------------
+            tracks_buffer_.gateByPnPInliers(buf_idx, inliers);
 
-        // -----------------------------
-        // 5) Gate DB based on PnP inliers (B-style: drop eligible outliers only)
-        // -----------------------------
-        tracks_buffer_.gateByPnPInliers(buf_idx, inliers);
-
-        // -----------------------------
-        // 6) Convert (rvec,tvec) -> Eigen::Isometry3d T_Ck_Ck1
-        // -----------------------------
-        {
+            // -----------------------------
+            // 6) Convert (rvec,tvec) -> Eigen::Isometry3d T_Ck_Cref
+            // -----------------------------
             cv::Mat R_cv;
             cv::Rodrigues(rvec, R_cv);
 
@@ -287,89 +292,19 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
                 t(r) = tvec.at<double>(r, 0);
             }
 
-            auto T_Ck_Ck1 = Eigen::Isometry3d::Identity();
-            T_Ck_Ck1.linear() = R;
-            T_Ck_Ck1.translation() = t;
+            T_Ck_Cref.linear() = R;
+            T_Ck_Cref.translation() = t;
+            have_pose_update = true;
 
-            vo_pose_abs_ = vo_pose_abs_ * T_Ck_Ck1.inverse();
-            output.vo_pose_rel = T_Ck_Ck1.inverse();
+            if (have_ref_kf_)
+                vo_pose_abs_ = ref_kf_pose_abs_ * T_Ck_Cref.inverse();
         }
     }
-    ///
-    /// SECTION - TRIANGULATE AND UPDATE DB
-    ///
-    // re triangulate points in local frame and update DB
-    const size_t N = tracks_buffer_.size();
-    const auto &pl = tracks_buffer_.pl();
-    const auto &pr = tracks_buffer_.pr();
-    const auto &has_r = tracks_buffer_.hasRight();
+    output.vo_pose_rel = pose_prev.inverse() * vo_pose_abs_;
 
-    auto &X_curr = scratch_.X_curr;
-    auto &valid_X = scratch_.valid_X;
-    X_curr.resize(N);
-    valid_X.resize(N);
-
-    for (size_t i = 0; i < N; ++i)
-    {
-        if (!has_r[i])
-        {
-            valid_X[i] = 0;
-            X_curr[i] = cv::Point3f(0.f, 0.f, 0.f);
-            continue;
-        }
-
-        cv::Point3f X;
-        const bool ok = triangulateRectified(
-            pl[i], pr[i],
-            calibration_.left.fx(), calibration_.left.fy(), calibration_.left.cx(), calibration_.left.cy(),
-            calibration_.baseline,
-            X);
-
-        valid_X[i] = ok ? uint8_t{1} : uint8_t{0};
-        X_curr[i] = ok ? X : cv::Point3f(0.f, 0.f, 0.f);
-    }
-
-    // Store as "prev 3D" for next frame's PnP
-    tracks_buffer_.setPrev3DAll(X_curr, &valid_X);
-
-    
-    tracks_buffer_.applyKeepMask(valid_X); // drops those without valid 3D
-    
     // add the tracks up to this point to the output, these are the tracks that helped steer the current update
     // these tracks we born at least on the last frame, and passed our temporal + stereo gates, and the pnp gate
     output.tracks = tracks_buffer_.pl();
-
-    ///
-    /// SECTION - TOPUP
-    ///  top up features
-
-    // build CPU mask around survivors
-    int need_i = (int)params_.target_features - (int)tracks_buffer_.size();
-    if (need_i < 0)
-        need_i = 0;
-    const uint16_t need = (uint16_t)need_i;
-
-    if (need > 0)
-    {
-        buildExclusionMaskDownsampledCPU(
-            d_gray8_left_.size(),
-            tracks_buffer_.pl(),
-            params_.mask_scale,
-            mask_small_cpu_,
-            mask_full_cpu_);
-
-        // Upload on the same stream to avoid sync jitter
-        d_mask_.upload(mask_full_cpu_, stream_);
-
-        auto &new_pts = scratch_.new_pts;
-        new_pts.clear();
-        new_pts.reserve(need);
-
-        feature_detector_.detect(d_gray8_left_, d_mask_, new_pts, need);
-
-        if (!new_pts.empty())
-            tracks_buffer_.addNewLeft(new_pts);
-    }
     //
     // SECTION - KEYFRAME EVALUATION AND CREATION
     //
@@ -380,7 +315,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     KeyframePolicy::Input kf_in;
     kf_in.t_s = stamp;
     kf_in.T_WC = vo_pose_abs_;
-    kf_in.pose_valid = true; // or: have_vo (if you only trust motion triggers when VO succeeded)
+    kf_in.pose_valid = have_pose_update;
 
     kf_in.track_ids = tracks_buffer_.ids().data();
     kf_in.num_tracks = tracks_buffer_.ids().size();
@@ -390,6 +325,45 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     // 2) If yes: build the keyframe event (1–10 Hz, copying vectors is fine)
     if (dec.make_keyframe)
     {
+        const size_t N = tracks_buffer_.size();
+        const auto &pl = tracks_buffer_.pl();
+        const auto &pr = tracks_buffer_.pr();
+        const auto &has_r = tracks_buffer_.hasRight();
+        auto &X_curr = scratch_.X_curr;
+        auto &valid_X = scratch_.valid_X;
+        X_curr.resize(N);
+        valid_X.resize(N);
+
+        const float fx = calibration_.left.fx();
+        const float fy = calibration_.left.fy();
+        const float cx = calibration_.left.cx();
+        const float cy = calibration_.left.cy();
+        const float baseline = calibration_.baseline;
+
+        for (size_t i = 0; i < N; ++i)
+        {
+            if (!has_r[i])
+            {
+                valid_X[i] = 0;
+                X_curr[i] = cv::Point3f(0.f, 0.f, 0.f);
+                continue;
+            }
+
+            cv::Point3f X;
+            const bool ok = triangulateRectified(
+                pl[i], pr[i],
+                fx, fy, cx, cy, baseline,
+                X);
+
+            valid_X[i] = ok ? uint8_t{1} : uint8_t{0};
+            X_curr[i] = ok ? X : cv::Point3f(0.f, 0.f, 0.f);
+        }
+
+        // Refresh the anchor landmarks only when a new keyframe is accepted.
+        tracks_buffer_.setPrev3DAll(X_curr, &valid_X);
+        ref_kf_pose_abs_ = vo_pose_abs_;
+        have_ref_kf_ = true;
+
         KeyframeEvent ev;
         ev.kf_id = next_kf_id_++;
         ev.t_start = timestamp_last_kf_;
@@ -435,6 +409,35 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
         timestamp_last_kf_ = stamp; // update last stamp
         prev_kf_id_ = ev.kf_id;
+    }
+
+    ///
+    /// SECTION - TOPUP
+    /// Add new tracks after KF evaluation so fresh points do not hide the need for a new anchor keyframe.
+    int need_i = static_cast<int>(params_.target_features) - static_cast<int>(tracks_buffer_.size());
+    if (need_i < 0)
+        need_i = 0;
+    const uint16_t need = static_cast<uint16_t>(need_i);
+
+    if (need > 0)
+    {
+        buildExclusionMaskDownsampledCPU(
+            d_gray8_left_.size(),
+            tracks_buffer_.pl(),
+            params_.mask_scale,
+            mask_small_cpu_,
+            mask_full_cpu_);
+
+        d_mask_.upload(mask_full_cpu_, stream_);
+
+        auto &new_pts = scratch_.new_pts;
+        new_pts.clear();
+        new_pts.reserve(need);
+
+        feature_detector_.detect(d_gray8_left_, d_mask_, new_pts, need);
+
+        if (!new_pts.empty())
+            tracks_buffer_.addNewLeft(new_pts);
     }
 
     // debug

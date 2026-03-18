@@ -186,7 +186,7 @@ void TracksBuffer::addNewLeft(const std::vector<cv::Point2f> &pl_new,
         pr_.push_back(cv::Point2f(0.f, 0.f));
         has_r_.push_back(uint8_t{0});
 
-        // Prev-3D unknown until setPrev3D*
+        // Reference 3D unknown until the track is present in an anchor keyframe.
         X_prev_.push_back(cv::Point3f(0.f, 0.f, 0.f));
         has_X_prev_.push_back(uint8_t{0});
 

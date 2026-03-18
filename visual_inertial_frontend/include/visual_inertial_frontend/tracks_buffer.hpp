@@ -30,7 +30,7 @@ public:
     const std::vector<cv::Point2f> &pr() const;
     const std::vector<uint8_t> &hasRight() const;
 
-    // prev-frame 3D cache aligned to tracks used for PnP with current pl_
+    // Reference-keyframe 3D cache aligned to tracks used for PnP with current pl_.
     const std::vector<cv::Point3f> &Xprev() const;
     const std::vector<uint8_t> &hasXprev() const;
 
@@ -45,8 +45,8 @@ public:
     // Does NOT gate/drop anything
     void setRightInPlace(const std::vector<cv::Point2f> &pr_new);
 
-    // Prev-frame 3D comes from "previous frame" triangulation
-    // computed elsewhere. This buffer just stores it aligned to tracks
+    // Reference 3D comes from triangulation in the active anchor keyframe.
+    // This buffer just stores it aligned to tracks.
     void setPrev3DAll(const std::vector<cv::Point3f> &X_prev_new,
                       const std::vector<uint8_t> *valid = nullptr);
 
@@ -78,7 +78,7 @@ private:
     std::vector<cv::Point2f> pr_;
     std::vector<uint8_t> has_r_;
 
-    // prev-frame 3D cache aligned with tracks for PnP this frame
+    // Reference-keyframe 3D cache aligned with tracks for PnP this frame.
     std::vector<cv::Point3f> X_prev_;
     std::vector<uint8_t> has_X_prev_;
 };
