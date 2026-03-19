@@ -160,6 +160,7 @@ public:
         kfcfg.min_trans_m = declare_parameter<double>("kf_min_trans_m", kfcfg.min_trans_m);
         kfcfg.min_rot_deg = declare_parameter<double>("kf_min_rot_deg", kfcfg.min_rot_deg);
         kfcfg.min_tracks = declare_parameter<int>("kf_min_tracks", kfcfg.min_tracks);
+        kfcfg.min_pnp_tracks = declare_parameter<int>("kf_min_pnp_tracks", kfcfg.min_pnp_tracks);
         kfcfg.min_shared_tracks = declare_parameter<int>("kf_min_shared_tracks", kfcfg.min_shared_tracks);
         kfcfg.min_shared_ratio = declare_parameter<double>("kf_min_shared_ratio", kfcfg.min_shared_ratio);
         kfcfg.force_kf_on_max_interval = declare_parameter<bool>("kf_force_on_max_interval", kfcfg.force_kf_on_max_interval);

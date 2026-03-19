@@ -18,6 +18,7 @@ KeyframePolicy::Decision KeyframePolicy::evaluate(const Input &in)
 {
     Decision d;
     d.num_tracks = static_cast<int>(in.num_tracks);
+    d.num_pnp_tracks = static_cast<int>(in.num_pnp_tracks);
 
     // First keyframe (or after reset)
     if (!has_last_kf_)
@@ -65,6 +66,12 @@ KeyframePolicy::Decision KeyframePolicy::evaluate(const Input &in)
     if (cfg_.min_tracks > 0 && static_cast<int>(in.num_tracks) < cfg_.min_tracks)
     {
         d.reasons |= kLowTracks;
+        want_kf = true;
+    }
+
+    if (cfg_.min_pnp_tracks > 0 && static_cast<int>(in.num_pnp_tracks) < cfg_.min_pnp_tracks)
+    {
+        d.reasons |= kLowPnPTracks;
         want_kf = true;
     }
 
@@ -124,7 +131,7 @@ KeyframePolicy::Decision KeyframePolicy::evaluate(const Input &in)
         if (cfg_.allow_early_kf_on_quality_drop)
         {
             const bool quality_drop =
-                (d.reasons & (kLowTracks | kLowSharedTracks)) != 0;
+                (d.reasons & (kLowTracks | kLowSharedTracks | kLowPnPTracks)) != 0;
 
             if (quality_drop)
             {

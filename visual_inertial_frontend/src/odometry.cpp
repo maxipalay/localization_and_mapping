@@ -77,6 +77,24 @@ bool triangulateRectified(
     return std::isfinite(x) && std::isfinite(y);
 }
 
+static inline void isometryToRvecTvec(
+    const Eigen::Isometry3d &T,
+    cv::Mat &rvec,
+    cv::Mat &tvec)
+{
+    cv::Matx33d R_cv;
+    for (int r = 0; r < 3; ++r)
+    {
+        for (int c = 0; c < 3; ++c)
+            R_cv(r, c) = T.linear()(r, c);
+    }
+
+    cv::Rodrigues(R_cv, rvec);
+    tvec.create(3, 1, CV_64F);
+    for (int r = 0; r < 3; ++r)
+        tvec.at<double>(r, 0) = T.translation()(r);
+}
+
 VisualInertial::VisualInertial(const Params &p)
     : params_(p),
       feature_detector_(FeatureDetector::Params{}, &stream_),
@@ -219,8 +237,18 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         std::cout << "[PNP] not enough points!" << std::endl;
 
     bool have_pose_update = false;
+    size_t pnp_tracks_for_policy = object_pts.size();
     const Eigen::Isometry3d pose_prev = vo_pose_abs_;
     Eigen::Isometry3d T_Ck_Cref = Eigen::Isometry3d::Identity();
+    cv::Mat rvec_guess;
+    cv::Mat tvec_guess;
+    const bool have_anchor_guess = have_ref_kf_;
+
+    if (have_anchor_guess)
+    {
+        const Eigen::Isometry3d T_Cprev_Cref = pose_prev.inverse() * ref_kf_pose_abs_;
+        isometryToRvecTvec(T_Cprev_Cref, rvec_guess, tvec_guess);
+    }
 
     if (object_pts.size() >= 6)
     {
@@ -267,6 +295,32 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
                 img_in.push_back(image_pts[(size_t)j]);
             }
 
+            cv::Mat rvec_iter = have_anchor_guess ? rvec_guess.clone() : rvec.clone();
+            cv::Mat tvec_iter = have_anchor_guess ? tvec_guess.clone() : tvec.clone();
+
+            bool iter_ok = cv::solvePnP(
+                obj_in, img_in, K_left, cv::Mat(),
+                rvec_iter, tvec_iter,
+                true,
+                cv::SOLVEPNP_ITERATIVE);
+
+            if (!iter_ok && have_anchor_guess)
+            {
+                rvec_iter = rvec.clone();
+                tvec_iter = tvec.clone();
+                iter_ok = cv::solvePnP(
+                    obj_in, img_in, K_left, cv::Mat(),
+                    rvec_iter, tvec_iter,
+                    true,
+                    cv::SOLVEPNP_ITERATIVE);
+            }
+
+            if (iter_ok)
+            {
+                rvec = rvec_iter;
+                tvec = tvec_iter;
+            }
+
             cv::TermCriteria crit(cv::TermCriteria::COUNT + cv::TermCriteria::EPS,
                                   params_.pnp_refine_max_iters,
                                   params_.pnp_refine_eps);
@@ -276,6 +330,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
             // 5) Gate DB based on PnP inliers (B-style: drop eligible outliers only)
             // -----------------------------
             tracks_buffer_.gateByPnPInliers(buf_idx, inliers);
+            pnp_tracks_for_policy = inliers.size();
 
             // -----------------------------
             // 6) Convert (rvec,tvec) -> Eigen::Isometry3d T_Ck_Cref
@@ -319,6 +374,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
     kf_in.track_ids = tracks_buffer_.ids().data();
     kf_in.num_tracks = tracks_buffer_.ids().size();
+    kf_in.num_pnp_tracks = pnp_tracks_for_policy;
 
     KeyframePolicy::Decision dec = keyframe_policy_.evaluate(kf_in);
 

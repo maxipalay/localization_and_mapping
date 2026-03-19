@@ -25,6 +25,7 @@ public:
         kLowSharedTracks = 1u << 4,   // too few tracks shared w/ last KF
         kMotionTranslation = 1u << 5, // exceeded translation threshold since last KF
         kMotionRotation = 1u << 6,    // exceeded rotation threshold since last KF
+        kLowPnPTracks = 1u << 7,      // too few anchored tracks available for PnP
     };
 
     struct Config
@@ -41,6 +42,7 @@ public:
         int min_tracks = 120;           // if current tracked points drop below this -> KF (or reset behavior)
         int min_shared_tracks = 60;     // if shared tracks w/ last KF drop below this -> KF
         double min_shared_ratio = 0.25; // OR ratio shared/last_kf_tracks below this -> KF (set <0 to disable)
+        int min_pnp_tracks = 80;        // if anchored/PnP-eligible tracks drop below this -> KF
 
         // Behavior knobs
         bool force_kf_on_max_interval = true;       // typical: true
@@ -58,6 +60,7 @@ public:
         // Current tracks (deterministic order not required here)
         const TrackId *track_ids = nullptr;
         size_t num_tracks = 0;
+        size_t num_pnp_tracks = 0;
     };
 
     struct Decision
@@ -70,6 +73,7 @@ public:
         double trans_since_last_kf_m = 0.0;
         double rot_since_last_kf_deg = 0.0;
         int num_tracks = 0;
+        int num_pnp_tracks = 0;
         int shared_tracks = 0;
         double shared_ratio = 0.0;
     };
@@ -145,6 +149,7 @@ inline std::string keyframeReasonsToString(uint32_t reasons) {
   if (reasons & R::kMinIntervalBlock)  add("MinIntervalBlock");
   if (reasons & R::kLowTracks)         add("LowTracks");
   if (reasons & R::kLowSharedTracks)   add("LowSharedTracks");
+  if (reasons & R::kLowPnPTracks)      add("LowPnPTracks");
   if (reasons & R::kMotionTranslation) add("MotionTranslation");
   if (reasons & R::kMotionRotation)    add("MotionRotation");
 
@@ -160,6 +165,7 @@ inline std::string keyframeDecisionDebugLine(const KeyframePolicy::Decision &d)
         << " trans=" << d.trans_since_last_kf_m
         << " rot_deg=" << d.rot_since_last_kf_deg
         << " tracks=" << d.num_tracks
+        << " pnp_tracks=" << d.num_pnp_tracks
         << " shared=" << d.shared_tracks
         << " shared_ratio=" << d.shared_ratio;
 

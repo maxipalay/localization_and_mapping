@@ -44,6 +44,7 @@ visual_inertial:
     kf_min_trans_m: 0.20
     kf_min_rot_deg: 10.0
     kf_min_tracks: 120
+    kf_min_pnp_tracks: 80
     kf_min_shared_tracks: 60
     kf_min_shared_ratio: 0.25
     kf_force_on_max_interval: true
