@@ -507,7 +507,7 @@ private:
     void publishKeyframe_(KeyframeEvent &ev)
     {
         visual_inertial::msg::Keyframe msg;
-        msg.header.stamp = rclcpp::Clock().now();
+        msg.header.stamp = toStamp(ev.t_end);
         msg.header.frame_id = "world";
         msg.kf_id = ev.kf_id;
         msg.t_start = ev.t_start;
