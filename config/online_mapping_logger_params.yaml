@@ -3,6 +3,7 @@ online_mapping_logger:
     output_root: /tmp/online_mapping_sessions
     session_name: ""
     overwrite_existing_session: false
+    body_frame_id: body
 
     rgb_image_topic: /oak/left/image_rect
     rgb_camera_info_topic: /oak/left/camera_info
@@ -12,8 +13,8 @@ online_mapping_logger:
     optimization_result_topic: /optimization_result
     tag_topic: /detections
     tag_tf_lookup_timeout_ms: 50.0
-    tag_frame_ids: [1, 2]
-    tag_frame_names: [base, zone1]
+    tag_frame_ids: [1, 2, 3]
+    tag_frame_names: [base, object1, object2]
 
     rgb_match_tolerance_ms: 3.0
     depth_match_tolerance_ms: 25.0

@@ -45,6 +45,7 @@ struct LoggerConfig
   std::string output_root;
   std::string session_name;
   bool overwrite_existing_session{false};
+  std::string body_frame_id{"body"};
 
   std::string rgb_image_topic;
   std::string rgb_camera_info_topic;
@@ -104,6 +105,7 @@ struct PendingKeyframe
   {
     std::string family;
     int32_t id{0};
+    std::string detection_frame_id;
     std::string parent_frame_id;
     std::string child_frame_id;
     int64_t lookup_stamp_ns{0};

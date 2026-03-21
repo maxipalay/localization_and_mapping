@@ -66,6 +66,7 @@ private:
     config.session_name = declare_parameter<std::string>("session_name", "");
     config.overwrite_existing_session =
       declare_parameter<bool>("overwrite_existing_session", false);
+    config.body_frame_id = declare_parameter<std::string>("body_frame_id", "body");
 
     config.rgb_image_topic = declare_parameter<std::string>("rgb_image_topic", "/oak/left/image_rect");
     config.rgb_camera_info_topic =
@@ -267,7 +268,8 @@ private:
       PendingKeyframe::LoggedTagPose tag_pose;
       tag_pose.family = detection.family;
       tag_pose.id = detection.id;
-      tag_pose.parent_frame_id = pending.tags_msg->header.frame_id;
+      tag_pose.detection_frame_id = pending.tags_msg->header.frame_id;
+      tag_pose.parent_frame_id = config_.body_frame_id;
       tag_pose.lookup_stamp_ns = pending.tags_stamp_ns;
 
       const auto override_it = tag_frame_overrides_.find(detection.id);
@@ -289,12 +291,13 @@ private:
         tag_pose.lookup_error = ex.what();
         RCLCPP_WARN(
           get_logger(),
-          "Failed to resolve tag TF for kf_id=%lu tag=%s:%d parent='%s' child='%s' stamp_ns=%lld: %s",
+          "Failed to resolve body->tag TF for kf_id=%lu tag=%s:%d body='%s' tag='%s' detection_frame='%s' stamp_ns=%lld: %s",
           static_cast<unsigned long>(pending.keyframe.kf_id),
           detection.family.c_str(),
           detection.id,
           tag_pose.parent_frame_id.c_str(),
           tag_pose.child_frame_id.c_str(),
+          tag_pose.detection_frame_id.c_str(),
           static_cast<long long>(tag_pose.lookup_stamp_ns),
           ex.what());
       }

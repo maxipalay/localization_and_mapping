@@ -184,7 +184,7 @@ void SessionWriter::openManifest_()
     << "kf_id,keyframe_stamp_ns,rgb_stamp_ns,depth_stamp_ns,tags_stamp_ns,"
     << "rgb_path,depth_path,tags_path,keyframe_meta_path,"
     << "frontend_px,frontend_py,frontend_pz,frontend_qx,frontend_qy,frontend_qz,frontend_qw,"
-    << "opt_px,opt_py,opt_pz,opt_qx,opt_qy,opt_qz,opt_qw,"
+    << "opt_body_px,opt_body_py,opt_body_pz,opt_body_qx,opt_body_qy,opt_body_qz,opt_body_qw,"
     << "track_count,tag_count\n";
   manifest_.flush();
 }
@@ -200,6 +200,8 @@ void SessionWriter::writeSessionMetadata_()
   os << "session_name: \"" << config_.session_name << "\"\n";
   os << "created_at_utc: \"" << nowUtcString() << "\"\n";
   os << "dataset_version: 1\n";
+  os << "frames:\n";
+  os << "  body: \"" << config_.body_frame_id << "\"\n";
   os << "topics:\n";
   os << "  rgb_image: \"" << config_.rgb_image_topic << "\"\n";
   os << "  rgb_camera_info: \"" << config_.rgb_camera_info_topic << "\"\n";
@@ -287,7 +289,7 @@ std::filesystem::path SessionWriter::writeKeyframeMetadata_(
   os << "has_imu: " << static_cast<int>(pending.keyframe.has_imu) << "\n";
   os << "pim_bytes_hex: \"" << toHex(pending.keyframe.pim_bytes) << "\"\n";
   writePoseYaml(os, "frontend_pose_wc", pending.keyframe.pose_wc);
-  writePoseYaml(os, "optimized_pose_wc", pending.opt_result.pose_wc_opt);
+  writePoseYaml(os, "optimized_pose_wb", pending.opt_result.pose_wb_opt);
   os << "optimization:\n";
   os << "  t_s: " << pending.opt_result.t_s << "\n";
   os << "  accel_bias: ["
@@ -362,6 +364,7 @@ std::filesystem::path SessionWriter::writeTags_(
       const auto &tag_pose = pending.tag_poses[idx];
       os << "    tf_pose:\n";
       os << "      available: " << (tag_pose.pose_available ? "true" : "false") << "\n";
+      os << "      detection_frame_id: \"" << tag_pose.detection_frame_id << "\"\n";
       os << "      parent_frame_id: \"" << tag_pose.parent_frame_id << "\"\n";
       os << "      child_frame_id: \"" << tag_pose.child_frame_id << "\"\n";
       os << "      lookup_stamp_ns: " << tag_pose.lookup_stamp_ns << "\n";
@@ -424,13 +427,13 @@ void SessionWriter::appendManifestLine_(
     << pending.keyframe.pose_wc.orientation.y << ","
     << pending.keyframe.pose_wc.orientation.z << ","
     << pending.keyframe.pose_wc.orientation.w << ","
-    << pending.opt_result.pose_wc_opt.position.x << ","
-    << pending.opt_result.pose_wc_opt.position.y << ","
-    << pending.opt_result.pose_wc_opt.position.z << ","
-    << pending.opt_result.pose_wc_opt.orientation.x << ","
-    << pending.opt_result.pose_wc_opt.orientation.y << ","
-    << pending.opt_result.pose_wc_opt.orientation.z << ","
-    << pending.opt_result.pose_wc_opt.orientation.w << ","
+    << pending.opt_result.pose_wb_opt.position.x << ","
+    << pending.opt_result.pose_wb_opt.position.y << ","
+    << pending.opt_result.pose_wb_opt.position.z << ","
+    << pending.opt_result.pose_wb_opt.orientation.x << ","
+    << pending.opt_result.pose_wb_opt.orientation.y << ","
+    << pending.opt_result.pose_wb_opt.orientation.z << ","
+    << pending.opt_result.pose_wb_opt.orientation.w << ","
     << pending.keyframe.track_ids.size() << ","
     << tag_count << "\n";
   manifest_.flush();
