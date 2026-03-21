@@ -280,26 +280,38 @@ public:
         auto bias_qos = rclcpp::QoS(rclcpp::KeepLast(2)).reliable().durability_volatile();
         bias_pub_ = this->create_publisher<visual_inertial::msg::ImuBias>("imu_bias", bias_qos);
 
-        // landmark pub
-        // In your OptimizationNode constructor (after parameters + tf broadcaster setup)
-        // Params
+        // Landmark publishing
+        publish_optimized_landmarks_ = declare_parameter<bool>("publish_optimized_landmarks", publish_optimized_landmarks_);
+        landmark_topic_ = declare_parameter<std::string>("landmark_topic", landmark_topic_);
         lm_pub_hz_ = declare_parameter<double>("landmark_pub_hz", 2.0);
 
-        // Publisher
-        auto lm_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile();
-        lm_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("optimized_landmarks", lm_qos);
+        if (publish_optimized_landmarks_)
+        {
+            auto lm_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile();
+            lm_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(landmark_topic_, lm_qos);
 
-        // Timer (publish at constant rate, independent of keyframes)
-        lm_timer_ = create_wall_timer(
-            std::chrono::duration<double>(1.0 / std::max(1e-6, lm_pub_hz_)),
-            [this]()
-            { this->publishLandmarksPointCloud_(); });
+            // Timer (publish at constant rate, independent of keyframes)
+            lm_timer_ = create_wall_timer(
+                std::chrono::duration<double>(1.0 / std::max(1e-6, lm_pub_hz_)),
+                [this]()
+                { this->publishLandmarksPointCloud_(); });
+        }
 
         // Optional smoothing params for TF and landmark caching
         smooth_tau_s_ = declare_parameter<double>("smooth_tau_s", smooth_tau_s_);
         publish_tf_hz_ = declare_parameter<double>("publish_tf_hz", publish_tf_hz_);
         lm_cache_max_ = static_cast<size_t>(declare_parameter<int>("lm_cache_max", static_cast<int>(lm_cache_max_)));
         lm_fetch_max_ = static_cast<size_t>(declare_parameter<int>("lm_fetch_max", static_cast<int>(lm_fetch_max_)));
+
+        if (publish_optimized_landmarks_)
+        {
+            RCLCPP_INFO(get_logger(), "Optimized landmark publishing enabled on '%s' @ %.2f Hz",
+                        landmark_topic_.c_str(), lm_pub_hz_);
+        }
+        else
+        {
+            RCLCPP_INFO(get_logger(), "Optimized landmark publishing disabled");
+        }
     }
 
     ~OptimizationNode() override
@@ -657,6 +669,8 @@ private:
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lm_pub_;
     rclcpp::TimerBase::SharedPtr lm_timer_;
+    bool publish_optimized_landmarks_{true};
+    std::string landmark_topic_{"optimized_landmarks"};
     double lm_pub_hz_{2.0};
 };
 

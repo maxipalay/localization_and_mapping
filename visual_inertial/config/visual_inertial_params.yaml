@@ -74,7 +74,7 @@ optimization_node:
     tf_pub_rate_hz: 30.0
 
     # Backend config
-    window_size: 12
+    window_size: 15
     stereo_sigma_px: 0.8
     prior_rot_sigma_rad: 0.05
     prior_trans_sigma_m: 0.05
@@ -94,6 +94,8 @@ optimization_node:
     max_keyframe_queue: 30
 
     # Landmark publishing
+    publish_optimized_landmarks: true
+    landmark_topic: optimized_landmarks
     landmark_pub_hz: 2.0
 
     # TF smoothing
@@ -101,5 +103,5 @@ optimization_node:
     publish_tf_hz: 30.0
 
     # Landmark cache limits
-    lm_cache_max: 2000
+    lm_cache_max: 6000
     lm_fetch_max: 0  # 0 => fetch all
