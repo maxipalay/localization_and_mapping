@@ -1,0 +1,8 @@
+# Counts and summary values from the latest optimizer update.
+int32 num_keyframes_in_window
+int32 num_landmarks_alive
+int32 num_landmarks_created
+int32 num_stereo_factors_added
+int32 num_between_factors_added
+int32 num_prior_factors_added
+float64 final_error

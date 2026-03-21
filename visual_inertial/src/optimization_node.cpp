@@ -5,6 +5,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 
 #include <visual_inertial/msg/keyframe.hpp>
+#include <visual_inertial/msg/optimization_result.hpp>
 
 #include <visual_inertial_common/types.hpp>
 #include <visual_inertial_optimization/optimization.hpp>
@@ -69,6 +70,23 @@ namespace
         tf.transform.rotation.z = q.z();
 
         return tf;
+    }
+
+    static geometry_msgs::msg::Pose isoToPoseMsg(const Eigen::Isometry3d &T)
+    {
+        geometry_msgs::msg::Pose pose;
+        pose.position.x = T.translation().x();
+        pose.position.y = T.translation().y();
+        pose.position.z = T.translation().z();
+
+        Eigen::Quaterniond q(T.linear());
+        q.normalize();
+        pose.orientation.w = q.w();
+        pose.orientation.x = q.x();
+        pose.orientation.y = q.y();
+        pose.orientation.z = q.z();
+
+        return pose;
     }
 
     static KeyframeEvent toKeyframeEvent(const visual_inertial::msg::Keyframe &msg)
@@ -279,6 +297,13 @@ public:
         // publisher for imu bias
         auto bias_qos = rclcpp::QoS(rclcpp::KeepLast(2)).reliable().durability_volatile();
         bias_pub_ = this->create_publisher<visual_inertial::msg::ImuBias>("imu_bias", bias_qos);
+        publish_optimization_result_ = declare_parameter<bool>("publish_optimization_result", publish_optimization_result_);
+        optimization_result_topic_ = declare_parameter<std::string>("optimization_result_topic", optimization_result_topic_);
+        if (publish_optimization_result_)
+        {
+            optimization_result_pub_ = this->create_publisher<visual_inertial::msg::OptimizationResult>(
+                optimization_result_topic_, bias_qos);
+        }
 
         // Landmark publishing
         publish_optimized_landmarks_ = declare_parameter<bool>("publish_optimized_landmarks", publish_optimized_landmarks_);
@@ -311,6 +336,16 @@ public:
         else
         {
             RCLCPP_INFO(get_logger(), "Optimized landmark publishing disabled");
+        }
+
+        if (publish_optimization_result_)
+        {
+            RCLCPP_INFO(get_logger(), "Optimization result publishing enabled on '%s'",
+                        optimization_result_topic_.c_str());
+        }
+        else
+        {
+            RCLCPP_INFO(get_logger(), "Optimization result publishing disabled");
         }
     }
 
@@ -478,6 +513,29 @@ private:
 
             bias_pub_->publish(bmsg);
 
+            visual_inertial::msg::OptimizationResult opt_msg;
+            opt_msg.header.stamp = msg.header.stamp;
+            opt_msg.header.frame_id = map_frame_id_;
+            opt_msg.kf_id = res->kf_id;
+            opt_msg.t_s = res->t_s;
+            opt_msg.pose_wc_opt = isoToPoseMsg(res->T_WC_opt);
+            opt_msg.pose_wb_opt = isoToPoseMsg(res->T_WB_opt);
+            opt_msg.stats.num_keyframes_in_window = res->stats.num_keyframes_in_window;
+            opt_msg.stats.num_landmarks_alive = res->stats.num_landmarks_alive;
+            opt_msg.stats.num_landmarks_created = res->stats.num_landmarks_created;
+            opt_msg.stats.num_stereo_factors_added = res->stats.num_stereo_factors_added;
+            opt_msg.stats.num_between_factors_added = res->stats.num_between_factors_added;
+            opt_msg.stats.num_prior_factors_added = res->stats.num_prior_factors_added;
+            opt_msg.stats.final_error = res->stats.final_error;
+            opt_msg.accel_bias.x = res->bias_opt.accel.x();
+            opt_msg.accel_bias.y = res->bias_opt.accel.y();
+            opt_msg.accel_bias.z = res->bias_opt.accel.z();
+            opt_msg.gyro_bias.x = res->bias_opt.gyro.x();
+            opt_msg.gyro_bias.y = res->bias_opt.gyro.y();
+            opt_msg.gyro_bias.z = res->bias_opt.gyro.z();
+            if (optimization_result_pub_)
+                optimization_result_pub_->publish(opt_msg);
+
             // Update cached map->odom correction (timer will broadcast it at constant rate)
             // const Eigen::Isometry3d T_odom_C = poseMsgToIso(msg.pose_wc);
             // const Eigen::Isometry3d T_map_C = res->T_WC_opt;
@@ -643,6 +701,7 @@ private:
 
     // publisher for imu bias
     rclcpp::Publisher<visual_inertial::msg::ImuBias>::SharedPtr bias_pub_;
+    rclcpp::Publisher<visual_inertial::msg::OptimizationResult>::SharedPtr optimization_result_pub_;
 
     // smoother for t map odom
     Eigen::Isometry3d T_map_odom_target_ = Eigen::Isometry3d::Identity();
@@ -669,6 +728,8 @@ private:
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lm_pub_;
     rclcpp::TimerBase::SharedPtr lm_timer_;
+    bool publish_optimization_result_{true};
+    std::string optimization_result_topic_{"optimization_result"};
     bool publish_optimized_landmarks_{true};
     std::string landmark_topic_{"optimized_landmarks"};
     double lm_pub_hz_{2.0};

@@ -93,6 +93,10 @@ optimization_node:
 
     max_keyframe_queue: 30
 
+    # Optimization result publishing
+    publish_optimization_result: true
+    optimization_result_topic: optimization_result
+
     # Landmark publishing
     publish_optimized_landmarks: true
     landmark_topic: optimized_landmarks
