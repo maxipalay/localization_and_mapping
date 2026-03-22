@@ -1,7 +1,7 @@
 #include "offline_dense_map_fusion/exporter.hpp"
 
-#include <fstream>
 #include <cmath>
+#include <fstream>
 #include <stdexcept>
 
 namespace offline_dense_map_fusion
@@ -72,34 +72,6 @@ void writeFusionOutputs(
 {
   std::filesystem::create_directories(output_dir);
 
-  const auto ply_path = output_dir / "fused_cloud.ply";
-  std::ofstream ply(ply_path, std::ios::out | std::ios::trunc);
-  if (!ply.is_open()) {
-    throw std::runtime_error("failed to open output file: " + ply_path.string());
-  }
-
-  ply
-    << "ply\n"
-    << "format ascii 1.0\n"
-    << "element vertex " << result.points.size() << "\n"
-    << "property float x\n"
-    << "property float y\n"
-    << "property float z\n"
-    << "property uchar red\n"
-    << "property uchar green\n"
-    << "property uchar blue\n"
-    << "end_header\n";
-
-  for (const auto &point : result.points) {
-    ply
-      << point.position[0] << " "
-      << point.position[1] << " "
-      << point.position[2] << " "
-      << static_cast<int>(point.color[2]) << " "
-      << static_cast<int>(point.color[1]) << " "
-      << static_cast<int>(point.color[0]) << "\n";
-  }
-
   const auto poses_path = output_dir / "camera_poses.csv";
   std::ofstream poses(poses_path, std::ios::out | std::ios::trunc);
   if (!poses.is_open()) {
@@ -124,9 +96,11 @@ void writeFusionOutputs(
   summary << "session_name: \"" << session.session_name << "\"\n";
   summary << "body_frame_id: \"" << session.body_frame_id << "\"\n";
   summary << "camera_frame_id: \"" << extrinsics.camera_frame_id << "\"\n";
+  summary << "fusion_backend: \"nvblox_tsdf\"\n";
   summary << "frame_count: " << result.frames_fused << "\n";
   summary << "raw_points_considered: " << result.raw_points_considered << "\n";
-  summary << "fused_points: " << result.points.size() << "\n";
+  summary << "mesh_path: \"" << result.mesh_path.filename().string() << "\"\n";
+  summary << "mesh_block_count: " << result.mesh_block_count << "\n";
   summary << "voxel_size_m: " << config.voxel_size_m << "\n";
   summary << "depth_scale: " << config.depth_scale << "\n";
   summary << "min_depth_m: " << config.min_depth_m << "\n";

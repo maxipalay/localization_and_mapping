@@ -92,14 +92,15 @@ int main(int argc, char **argv)
       output_dir = session_dir / "offline_dense_map_fusion";
     }
 
-    const auto result = offline_dense_map_fusion::fuseSession(session, extrinsics, config);
+    const auto result = offline_dense_map_fusion::fuseSession(session, extrinsics, config, output_dir);
     offline_dense_map_fusion::writeFusionOutputs(session, extrinsics, config, result, output_dir);
 
     std::cout
       << "Fused dense map for session '" << session.session_name << "'\n"
       << "  frames: " << result.frames_fused << "\n"
       << "  raw_points_considered: " << result.raw_points_considered << "\n"
-      << "  fused_points: " << result.points.size() << "\n"
+      << "  mesh_path: " << result.mesh_path.string() << "\n"
+      << "  mesh_blocks: " << result.mesh_block_count << "\n"
       << "  output_dir: " << output_dir.string() << "\n";
     return 0;
   } catch (const std::exception &ex) {

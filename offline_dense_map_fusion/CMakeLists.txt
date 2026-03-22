@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
+find_package(CUDAToolkit REQUIRED)
+find_package(gflags REQUIRED)
+find_package(glog REQUIRED)
+find_package(nvblox REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
@@ -21,6 +25,7 @@ target_include_directories(${PROJECT_NAME}_core PUBLIC
 )
 
 target_link_libraries(${PROJECT_NAME}_core
+  nvblox::nvblox_lib
   ${OpenCV_LIBS}
   yaml-cpp
 )

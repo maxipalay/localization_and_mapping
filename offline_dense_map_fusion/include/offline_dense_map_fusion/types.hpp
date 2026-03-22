@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace offline_dense_map_fusion
@@ -62,18 +61,13 @@ struct FusionConfig
   int pixel_stride{2};
 };
 
-struct ColoredPoint
-{
-  cv::Vec3f position;
-  cv::Vec3b color;
-};
-
 struct FusionResult
 {
-  std::vector<ColoredPoint> points;
+  std::filesystem::path mesh_path;
   std::vector<std::pair<uint64_t, Pose>> world_T_camera_by_kf;
   size_t frames_fused{0};
   size_t raw_points_considered{0};
+  size_t mesh_block_count{0};
 };
 
 }  // namespace offline_dense_map_fusion
