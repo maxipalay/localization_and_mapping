@@ -32,6 +32,9 @@ Optional flags:
 - `--min-depth FLOAT`
 - `--max-depth FLOAT`
 - `--pixel-stride INT`
+- `--truncation-distance-vox FLOAT`
+- `--max-weight FLOAT`
+- `--mesh-min-weight FLOAT`
 
 ## Extrinsics YAML
 
@@ -49,3 +52,20 @@ The transform is interpreted as `body_T_camera`.
 - `fused_mesh.ply`
 - `camera_poses.csv`
 - `fusion_summary.yaml`
+
+## Useful tuning
+
+If the mesh is noisy, a good first pass is:
+
+```bash
+ros2 run offline_dense_map_fusion offline_dense_map_fusion_cli \
+  --session-dir /tmp/online_mapping_sessions/<session> \
+  --body-to-camera-extrinsics /home/max/develop/workspaces/myslam/src/body_to_oak_left_optical.yaml \
+  --voxel-size 0.05 \
+  --pixel-stride 4 \
+  --min-depth 0.3 \
+  --max-depth 3.0 \
+  --truncation-distance-vox 6.0 \
+  --max-weight 10.0 \
+  --mesh-min-weight 0.5
+```

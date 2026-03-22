@@ -82,6 +82,15 @@ FusionResult fuseSession(
   if (config.pixel_stride <= 0) {
     throw std::runtime_error("pixel_stride must be positive");
   }
+  if (config.truncation_distance_vox <= 0.0) {
+    throw std::runtime_error("truncation_distance_vox must be positive");
+  }
+  if (config.max_weight <= 0.0) {
+    throw std::runtime_error("max_weight must be positive");
+  }
+  if (config.mesh_min_weight < 0.0) {
+    throw std::runtime_error("mesh_min_weight must be non-negative");
+  }
 
   FusionResult result;
 
@@ -93,6 +102,12 @@ FusionResult fuseSession(
   nvblox::MapperParams mapper_params;
   mapper_params.projective_integrator_params.projective_integrator_max_integration_distance_m =
     static_cast<float>(config.max_depth_m);
+  mapper_params.projective_integrator_params.projective_integrator_truncation_distance_vox =
+    static_cast<float>(config.truncation_distance_vox);
+  mapper_params.projective_integrator_params.projective_integrator_max_weight =
+    static_cast<float>(config.max_weight);
+  mapper_params.mesh_integrator_params.mesh_integrator_min_weight =
+    static_cast<float>(config.mesh_min_weight);
   mapper.setMapperParams(mapper_params);
 
   const int stride = std::max(1, config.pixel_stride);

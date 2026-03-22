@@ -106,6 +106,9 @@ void writeFusionOutputs(
   summary << "min_depth_m: " << config.min_depth_m << "\n";
   summary << "max_depth_m: " << config.max_depth_m << "\n";
   summary << "pixel_stride: " << config.pixel_stride << "\n";
+  summary << "truncation_distance_vox: " << config.truncation_distance_vox << "\n";
+  summary << "max_weight: " << config.max_weight << "\n";
+  summary << "mesh_min_weight: " << config.mesh_min_weight << "\n";
   summary << "intrinsics:\n";
   summary << "  width: " << session.camera.width << "\n";
   summary << "  height: " << session.camera.height << "\n";

@@ -59,6 +59,9 @@ struct FusionConfig
   double min_depth_m{0.2};
   double max_depth_m{5.0};
   int pixel_stride{2};
+  double truncation_distance_vox{4.0};
+  double max_weight{5.0};
+  double mesh_min_weight{1e-4};
 };
 
 struct FusionResult

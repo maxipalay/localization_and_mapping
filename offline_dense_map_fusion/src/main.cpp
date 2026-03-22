@@ -15,7 +15,9 @@ void printUsage()
   std::cerr
     << "Usage: offline_dense_map_fusion_cli --session-dir PATH --body-to-camera-extrinsics PATH\n"
     << "       [--output-dir PATH] [--voxel-size FLOAT] [--depth-scale FLOAT]\n"
-    << "       [--min-depth FLOAT] [--max-depth FLOAT] [--pixel-stride INT]\n";
+    << "       [--min-depth FLOAT] [--max-depth FLOAT] [--pixel-stride INT]\n"
+    << "       [--truncation-distance-vox FLOAT] [--max-weight FLOAT]\n"
+    << "       [--mesh-min-weight FLOAT]\n";
 }
 
 std::string requireValue(int argc, char **argv, int &index, const char *flag)
@@ -73,6 +75,15 @@ int main(int argc, char **argv)
         config.max_depth_m = parseDouble(requireValue(argc, argv, i, "--max-depth"), "--max-depth");
       } else if (arg == "--pixel-stride") {
         config.pixel_stride = parseInt(requireValue(argc, argv, i, "--pixel-stride"), "--pixel-stride");
+      } else if (arg == "--truncation-distance-vox") {
+        config.truncation_distance_vox =
+          parseDouble(requireValue(argc, argv, i, "--truncation-distance-vox"), "--truncation-distance-vox");
+      } else if (arg == "--max-weight") {
+        config.max_weight =
+          parseDouble(requireValue(argc, argv, i, "--max-weight"), "--max-weight");
+      } else if (arg == "--mesh-min-weight") {
+        config.mesh_min_weight =
+          parseDouble(requireValue(argc, argv, i, "--mesh-min-weight"), "--mesh-min-weight");
       } else if (arg == "--help" || arg == "-h") {
         printUsage();
         return 0;
