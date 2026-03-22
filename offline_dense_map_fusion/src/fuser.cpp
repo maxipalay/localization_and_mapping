@@ -82,6 +82,9 @@ FusionResult fuseSession(
   if (config.pixel_stride <= 0) {
     throw std::runtime_error("pixel_stride must be positive");
   }
+  if (config.crop_border_px < 0) {
+    throw std::runtime_error("crop_border_px must be non-negative");
+  }
   if (config.truncation_distance_vox <= 0.0) {
     throw std::runtime_error("truncation_distance_vox must be positive");
   }
@@ -109,15 +112,25 @@ FusionResult fuseSession(
   mapper_params.mesh_integrator_params.mesh_integrator_min_weight =
     static_cast<float>(config.mesh_min_weight);
   mapper.setMapperParams(mapper_params);
+  mapper.color_integrator().sphere_tracing_ray_subsampling_factor(1);
 
   const int stride = std::max(1, config.pixel_stride);
-  const int camera_width = (session.camera.width + stride - 1) / stride;
-  const int camera_height = (session.camera.height + stride - 1) / stride;
+  const int crop = config.crop_border_px;
+  const int full_width = session.camera.width;
+  const int full_height = session.camera.height;
+  if ((crop * 2) >= full_width || (crop * 2) >= full_height) {
+    throw std::runtime_error(
+      "crop_border_px is too large for camera intrinsics: " + std::to_string(crop));
+  }
+  const int roi_width = full_width - 2 * crop;
+  const int roi_height = full_height - 2 * crop;
+  const int camera_width = (roi_width + stride - 1) / stride;
+  const int camera_height = (roi_height + stride - 1) / stride;
   nvblox::Camera camera(
     static_cast<float>(session.camera.fx / stride),
     static_cast<float>(session.camera.fy / stride),
-    static_cast<float>(session.camera.cx / stride),
-    static_cast<float>(session.camera.cy / stride),
+    static_cast<float>((session.camera.cx - crop) / stride),
+    static_cast<float>((session.camera.cy - crop) / stride),
     camera_width,
     camera_height);
 
@@ -136,16 +149,22 @@ FusionResult fuseSession(
 
     const int rows = std::min(depth.rows, rgb.rows);
     const int cols = std::min(depth.cols, rgb.cols);
-    const int sampled_rows = (rows + stride - 1) / stride;
-    const int sampled_cols = (cols + stride - 1) / stride;
+    if ((crop * 2) >= rows || (crop * 2) >= cols) {
+      throw std::runtime_error(
+        "crop_border_px is too large for image size: " + std::to_string(crop));
+    }
+    const int roi_rows = rows - 2 * crop;
+    const int roi_cols = cols - 2 * crop;
+    const int sampled_rows = (roi_rows + stride - 1) / stride;
+    const int sampled_cols = (roi_cols + stride - 1) / stride;
 
     std::vector<float> depth_buffer(static_cast<size_t>(sampled_rows * sampled_cols), 0.0f);
     std::vector<nvblox::Color> color_buffer(static_cast<size_t>(sampled_rows * sampled_cols));
 
     for (int out_y = 0; out_y < sampled_rows; ++out_y) {
-      const int src_y = std::min(out_y * stride, rows - 1);
+      const int src_y = std::min(crop + out_y * stride, rows - crop - 1);
       for (int out_x = 0; out_x < sampled_cols; ++out_x) {
-        const int src_x = std::min(out_x * stride, cols - 1);
+        const int src_x = std::min(crop + out_x * stride, cols - crop - 1);
         const size_t linear_idx = static_cast<size_t>(out_y * sampled_cols + out_x);
 
         const double depth_m = depthMetersAt(depth, src_y, src_x, config.depth_scale);

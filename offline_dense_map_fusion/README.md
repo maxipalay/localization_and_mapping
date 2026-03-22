@@ -32,6 +32,7 @@ Optional flags:
 - `--min-depth FLOAT`
 - `--max-depth FLOAT`
 - `--pixel-stride INT`
+- `--crop-border-px INT`
 - `--truncation-distance-vox FLOAT`
 - `--max-weight FLOAT`
 - `--mesh-min-weight FLOAT`
@@ -63,6 +64,7 @@ ros2 run offline_dense_map_fusion offline_dense_map_fusion_cli \
   --body-to-camera-extrinsics /home/max/develop/workspaces/myslam/src/body_to_oak_left_optical.yaml \
   --voxel-size 0.05 \
   --pixel-stride 4 \
+  --crop-border-px 10 \
   --min-depth 0.3 \
   --max-depth 3.0 \
   --truncation-distance-vox 6.0 \

@@ -16,6 +16,7 @@ void printUsage()
     << "Usage: offline_dense_map_fusion_cli --session-dir PATH --body-to-camera-extrinsics PATH\n"
     << "       [--output-dir PATH] [--voxel-size FLOAT] [--depth-scale FLOAT]\n"
     << "       [--min-depth FLOAT] [--max-depth FLOAT] [--pixel-stride INT]\n"
+    << "       [--crop-border-px INT]\n"
     << "       [--truncation-distance-vox FLOAT] [--max-weight FLOAT]\n"
     << "       [--mesh-min-weight FLOAT]\n";
 }
@@ -75,6 +76,8 @@ int main(int argc, char **argv)
         config.max_depth_m = parseDouble(requireValue(argc, argv, i, "--max-depth"), "--max-depth");
       } else if (arg == "--pixel-stride") {
         config.pixel_stride = parseInt(requireValue(argc, argv, i, "--pixel-stride"), "--pixel-stride");
+      } else if (arg == "--crop-border-px") {
+        config.crop_border_px = parseInt(requireValue(argc, argv, i, "--crop-border-px"), "--crop-border-px");
       } else if (arg == "--truncation-distance-vox") {
         config.truncation_distance_vox =
           parseDouble(requireValue(argc, argv, i, "--truncation-distance-vox"), "--truncation-distance-vox");
