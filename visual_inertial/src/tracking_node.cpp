@@ -96,7 +96,7 @@ class FeatureNode : public rclcpp::Node
 {
 public:
     FeatureNode()
-        : Node("cuda_gftt_node")
+        : Node("visual_inertial")
     {
         // Params
         input_topic_left_ = declare_parameter<std::string>("input_topic_left", "/oak/left/image_rect");
@@ -142,6 +142,13 @@ public:
         vi_params.kf_pending_queue_max = static_cast<size_t>(declare_parameter<int>(
             "kf_pending_queue_max", static_cast<int>(vi_params.kf_pending_queue_max)));
         vi_params.mask_scale = declare_parameter<int>("mask_scale", vi_params.mask_scale);
+        vi_params.topup_grid_scale = declare_parameter<int>("topup_grid_scale", vi_params.topup_grid_scale);
+        vi_params.max_total_tracks = static_cast<uint16_t>(declare_parameter<int>(
+            "max_total_tracks", static_cast<int>(vi_params.max_total_tracks)));
+        vi_params.topup_burst_factor = declare_parameter<double>(
+            "topup_burst_factor", vi_params.topup_burst_factor);
+        vi_params.topup_detect_factor = declare_parameter<double>(
+            "topup_detect_factor", vi_params.topup_detect_factor);
         vi_params.pnp_iterations_count = declare_parameter<int>(
             "pnp_iterations_count", vi_params.pnp_iterations_count);
         vi_params.pnp_reproj_error_px = static_cast<float>(declare_parameter<double>(

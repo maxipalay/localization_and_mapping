@@ -168,7 +168,7 @@ class OptimizationNode final : public rclcpp::Node
 {
 public:
     OptimizationNode()
-        : rclcpp::Node("visual_inertial_optimization_node")
+        : rclcpp::Node("visual_inertial_optimization")
     {
         // -------- Parameters --------
         keyframe_topic_ = declare_parameter<std::string>("keyframe_topic", "keyframes");

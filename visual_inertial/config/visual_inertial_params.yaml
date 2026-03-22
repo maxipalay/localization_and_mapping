@@ -1,4 +1,4 @@
-visual_inertial:
+cuda_gftt_node:
   ros__parameters:
     T_BC_translation: [0.0, 0.05, 0.0]
     T_BC_quaternion_xyzw: [0.5, -0.5, 0.5, -0.5]
@@ -19,7 +19,7 @@ visual_inertial:
     child_frame_id: body
 
     # VisualInertial core
-    target_features: 500
+    target_features: 600
     stereo_epi_eps_y: 1.5
     stereo_disp_min: 3.0
     stereo_disp_max: 255.0
@@ -29,7 +29,12 @@ visual_inertial:
     kf_ready_queue_max: 30
     kf_pending_queue_max: 30
 
+    # Track top-up / spatial distribution
     mask_scale: 20
+    topup_grid_scale: 24
+    max_total_tracks: 900
+    topup_burst_factor: 2.0
+    topup_detect_factor: 3.0
 
     # PnP tuning
     pnp_iterations_count: 100
@@ -39,13 +44,13 @@ visual_inertial:
     pnp_refine_eps: 1e-6
 
     # Keyframe policy
-    kf_min_dt_s: 0.20
-    kf_max_dt_s: 2.00
-    kf_min_trans_m: 0.20
-    kf_min_rot_deg: 10.0
+    kf_min_dt_s: 0.10
+    kf_max_dt_s: 1.00
+    kf_min_trans_m: 0.05
+    kf_min_rot_deg: 5.0
     kf_min_tracks: 120
-    kf_min_pnp_tracks: 80
-    kf_min_shared_tracks: 60
+    kf_min_pnp_tracks: 100
+    kf_min_shared_tracks: 90
     kf_min_shared_ratio: 0.25
     kf_force_on_max_interval: true
     kf_allow_early_on_quality_drop: true
@@ -59,7 +64,7 @@ visual_inertial:
     imu_max_buffer_s: 5.0
     imu_keep_anchor: true
 
-optimization_node:
+visual_inertial_optimization_node:
   ros__parameters:
     T_BC_translation: [0.0, 0.05, 0.0]
     T_BC_quaternion_xyzw: [0.5, -0.5, 0.5, -0.5]
@@ -103,7 +108,7 @@ optimization_node:
     landmark_pub_hz: 2.0
 
     # TF smoothing
-    smooth_tau_s: 0.5
+    smooth_tau_s: 0.1
     publish_tf_hz: 30.0
 
     # Landmark cache limits
