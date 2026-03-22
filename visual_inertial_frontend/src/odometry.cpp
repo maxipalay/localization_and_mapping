@@ -57,6 +57,54 @@ static inline void buildExclusionMaskDownsampledCPU(
     cv::resize(mask_small, mask_full, full_sz, 0, 0, cv::INTER_NEAREST);
 }
 
+static inline size_t countSetFlags(const std::vector<uint8_t> &flags)
+{
+    return static_cast<size_t>(std::count_if(
+        flags.begin(), flags.end(),
+        [](uint8_t v)
+        { return v != 0; }));
+}
+
+static inline void selectDistributedTopupPoints(
+    const cv::Size &full_sz,
+    const std::vector<cv::Point2f> &candidates,
+    int grid_scale,
+    size_t max_pts,
+    std::vector<cv::Point2f> &selected)
+{
+    selected.clear();
+    if (candidates.empty() || max_pts == 0)
+        return;
+
+    const int scale = std::max(1, grid_scale);
+    const int sw = (full_sz.width + scale - 1) / scale;
+    const int sh = (full_sz.height + scale - 1) / scale;
+
+    cv::Mat occupied(sh, sw, CV_8U, cv::Scalar(0));
+    selected.reserve(std::min(max_pts, candidates.size()));
+
+    for (const auto &p : candidates)
+    {
+        const int x = static_cast<int>(p.x);
+        const int y = static_cast<int>(p.y);
+        if ((unsigned)x >= (unsigned)full_sz.width || (unsigned)y >= (unsigned)full_sz.height)
+            continue;
+
+        const int sx = x / scale;
+        const int sy = y / scale;
+        if ((unsigned)sx >= (unsigned)sw || (unsigned)sy >= (unsigned)sh)
+            continue;
+
+        if (occupied.at<uint8_t>(sy, sx) != 0)
+            continue;
+
+        occupied.at<uint8_t>(sy, sx) = 1;
+        selected.push_back(p);
+        if (selected.size() >= max_pts)
+            break;
+    }
+}
+
 // Inputs: pl[i], pr[i] in pixels (rectified); intrinsics fx, fy, cx, cy; baseline B (meters)
 bool triangulateRectified(
     const cv::Point2f &pl, const cv::Point2f &pr,
@@ -131,9 +179,20 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         // Upload both frames to device
         d_gray8_left_.upload(gray8_left, stream_);
         d_gray8_right_.upload(gray8_right, stream_);
+        std::vector<cv::Point2f> candidates;
         std::vector<cv::Point2f> new_pts;
+        candidates.reserve(static_cast<size_t>(params_.target_features) * 2);
         new_pts.reserve(params_.target_features);
-        feature_detector_.detect(d_gray8_left_, d_mask_, new_pts, params_.target_features);
+        feature_detector_.detect(
+            d_gray8_left_, d_mask_, candidates,
+            std::max<int>(params_.target_features,
+                          static_cast<int>(std::ceil(params_.target_features * params_.topup_detect_factor))));
+        selectDistributedTopupPoints(
+            gray8_left.size(),
+            candidates,
+            params_.topup_grid_scale,
+            params_.target_features,
+            new_pts);
         tracks_buffer_.addNewLeft(new_pts);
         first_frame_ = false;
         d_gray8_left_prev_ = d_gray8_left_.clone();
@@ -470,12 +529,13 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     ///
     /// SECTION - TOPUP
     /// Add new tracks after KF evaluation so fresh points do not hide the need for a new anchor keyframe.
-    int need_i = static_cast<int>(params_.target_features) - static_cast<int>(tracks_buffer_.size());
-    if (need_i < 0)
-        need_i = 0;
-    const uint16_t need = static_cast<uint16_t>(need_i);
+    const size_t usable_track_count = countSetFlags(tracks_buffer_.hasRight());
+    const int usable_deficit =
+        static_cast<int>(params_.target_features) - static_cast<int>(usable_track_count);
+    const int total_capacity =
+        static_cast<int>(params_.max_total_tracks) - static_cast<int>(tracks_buffer_.size());
 
-    if (need > 0)
+    if (usable_deficit > 0 && total_capacity > 0)
     {
         buildExclusionMaskDownsampledCPU(
             d_gray8_left_.size(),
@@ -486,11 +546,31 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
         d_mask_.upload(mask_full_cpu_, stream_);
 
+        const int refill_goal = std::max(
+            usable_deficit,
+            static_cast<int>(std::ceil(usable_deficit * params_.topup_burst_factor)));
+        const int topup_limit = std::min(refill_goal, total_capacity);
+        const int detect_limit = std::min(
+            total_capacity,
+            std::max(
+                topup_limit,
+                static_cast<int>(std::ceil(topup_limit * params_.topup_detect_factor))));
+
+        auto &candidate_pts = scratch_.candidate_pts;
+        candidate_pts.clear();
+        candidate_pts.reserve(detect_limit);
+
         auto &new_pts = scratch_.new_pts;
         new_pts.clear();
-        new_pts.reserve(need);
+        new_pts.reserve(topup_limit);
 
-        feature_detector_.detect(d_gray8_left_, d_mask_, new_pts, need);
+        feature_detector_.detect(d_gray8_left_, d_mask_, candidate_pts, detect_limit);
+        selectDistributedTopupPoints(
+            d_gray8_left_.size(),
+            candidate_pts,
+            params_.topup_grid_scale,
+            static_cast<size_t>(topup_limit),
+            new_pts);
 
         if (!new_pts.empty())
             tracks_buffer_.addNewLeft(new_pts);

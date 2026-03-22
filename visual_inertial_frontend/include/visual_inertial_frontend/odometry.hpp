@@ -47,6 +47,10 @@ public:
 
         // Mask generation for top-up; higher = coarser blocks
         int mask_scale = 20;
+        int topup_grid_scale = 20;
+        uint16_t max_total_tracks = 1000;
+        double topup_burst_factor = 2.0;
+        double topup_detect_factor = 3.0;
 
         // PnP tuning
         int pnp_iterations_count = 100;
@@ -172,6 +176,7 @@ private:
 
         // Top-up
         std::vector<cv::Point2f> new_pts;
+        std::vector<cv::Point2f> candidate_pts;
 
         // CPU mask reuse
         cv::Mat cpu_mask;
@@ -201,6 +206,7 @@ private:
             valid_X.reserve(n_tracks);
 
             new_pts.reserve(n_new);
+            candidate_pts.reserve(n_new * 2);
 
             if (cpu_mask.empty() || cpu_mask.size() != img_sz)
             {
@@ -234,6 +240,7 @@ private:
             valid_X.clear();
 
             new_pts.clear();
+            candidate_pts.clear();
         }
     };
     Scratch scratch_;
