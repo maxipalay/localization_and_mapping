@@ -68,6 +68,59 @@ nvblox::Transform toNvbloxTransform(const Pose &pose)
   return T;
 }
 
+std::optional<nvblox::RadialTangentialDistortionParams> toNvbloxDistortion(
+  const CameraIntrinsics &camera)
+{
+  if (camera.distortion_coeffs.empty()) {
+    return std::nullopt;
+  }
+
+  const std::string &model = camera.distortion_model;
+  if (!model.empty() && model != "plumb_bob" && model != "rational_polynomial") {
+    return std::nullopt;
+  }
+
+  nvblox::RadialTangentialDistortionParams distortion;
+  if (camera.distortion_coeffs.size() > 0) {
+    distortion.radial.k1 = static_cast<float>(camera.distortion_coeffs[0]);
+  }
+  if (camera.distortion_coeffs.size() > 1) {
+    distortion.radial.k2 = static_cast<float>(camera.distortion_coeffs[1]);
+  }
+  if (camera.distortion_coeffs.size() > 2) {
+    distortion.tangential.p1 = static_cast<float>(camera.distortion_coeffs[2]);
+  }
+  if (camera.distortion_coeffs.size() > 3) {
+    distortion.tangential.p2 = static_cast<float>(camera.distortion_coeffs[3]);
+  }
+  if (camera.distortion_coeffs.size() > 4) {
+    distortion.radial.k3 = static_cast<float>(camera.distortion_coeffs[4]);
+  }
+  if (camera.distortion_coeffs.size() > 5) {
+    distortion.radial.k4 = static_cast<float>(camera.distortion_coeffs[5]);
+  }
+  if (camera.distortion_coeffs.size() > 6) {
+    distortion.radial.k5 = static_cast<float>(camera.distortion_coeffs[6]);
+  }
+  if (camera.distortion_coeffs.size() > 7) {
+    distortion.radial.k6 = static_cast<float>(camera.distortion_coeffs[7]);
+  }
+
+  const bool all_zero =
+    std::abs(distortion.radial.k1) < 1e-12f &&
+    std::abs(distortion.radial.k2) < 1e-12f &&
+    std::abs(distortion.radial.k3) < 1e-12f &&
+    std::abs(distortion.radial.k4) < 1e-12f &&
+    std::abs(distortion.radial.k5) < 1e-12f &&
+    std::abs(distortion.radial.k6) < 1e-12f &&
+    std::abs(distortion.tangential.p1) < 1e-12f &&
+    std::abs(distortion.tangential.p2) < 1e-12f;
+  if (all_zero) {
+    return std::nullopt;
+  }
+  return distortion;
+}
+
 }  // namespace
 
 FusionResult fuseSession(
@@ -126,13 +179,15 @@ FusionResult fuseSession(
   const int roi_height = full_height - 2 * crop;
   const int camera_width = (roi_width + stride - 1) / stride;
   const int camera_height = (roi_height + stride - 1) / stride;
+  const auto distortion_params = toNvbloxDistortion(session.camera);
   nvblox::Camera camera(
     static_cast<float>(session.camera.fx / stride),
     static_cast<float>(session.camera.fy / stride),
     static_cast<float>((session.camera.cx - crop) / stride),
     static_cast<float>((session.camera.cy - crop) / stride),
     camera_width,
-    camera_height);
+    camera_height,
+    distortion_params);
 
   for (const auto &frame : session.frames) {
     const cv::Mat rgb = cv::imread(frame.rgb_path.string(), cv::IMREAD_UNCHANGED);

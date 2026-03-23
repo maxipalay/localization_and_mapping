@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,8 @@ struct CameraIntrinsics
   double cx{0.0};
   double cy{0.0};
   std::string frame_id;
+  std::string distortion_model;
+  std::vector<double> distortion_coeffs;
 };
 
 struct Extrinsics

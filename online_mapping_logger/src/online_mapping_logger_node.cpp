@@ -68,12 +68,12 @@ private:
       declare_parameter<bool>("overwrite_existing_session", false);
     config.body_frame_id = declare_parameter<std::string>("body_frame_id", "body");
 
-    config.rgb_image_topic = declare_parameter<std::string>("rgb_image_topic", "/oak/left/image_rect");
+    config.rgb_image_topic = declare_parameter<std::string>("rgb_image_topic", "/oak/left/image_synced");
     config.rgb_camera_info_topic =
-      declare_parameter<std::string>("rgb_camera_info_topic", "/oak/left/camera_info");
+      declare_parameter<std::string>("rgb_camera_info_topic", "/oak/left/image_synced/camera_info");
     config.depth_image_topic = declare_parameter<std::string>("depth_image_topic", "/oak/depth");
     config.depth_camera_info_topic =
-      declare_parameter<std::string>("depth_camera_info_topic", "");
+      declare_parameter<std::string>("depth_camera_info_topic", "/oak/depth/camera_info");
     config.keyframe_topic = declare_parameter<std::string>("keyframe_topic", "/keyframes");
     config.optimization_result_topic =
       declare_parameter<std::string>("optimization_result_topic", "/optimization_result");

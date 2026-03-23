@@ -117,6 +117,15 @@ void writeFusionOutputs(
   summary << "  fy: " << session.camera.fy << "\n";
   summary << "  cx: " << session.camera.cx << "\n";
   summary << "  cy: " << session.camera.cy << "\n";
+  summary << "  distortion_model: \"" << session.camera.distortion_model << "\"\n";
+  summary << "  distortion_coeffs: [";
+  for (size_t i = 0; i < session.camera.distortion_coeffs.size(); ++i) {
+    if (i > 0) {
+      summary << ", ";
+    }
+    summary << session.camera.distortion_coeffs[i];
+  }
+  summary << "]\n";
 }
 
 }  // namespace offline_dense_map_fusion

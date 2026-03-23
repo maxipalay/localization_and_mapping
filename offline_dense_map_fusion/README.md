@@ -7,9 +7,14 @@ optimized poses.
 
 - Reads the logged RGB-D session
 - Reads optimized body poses from `offline_global_graph/optimized_keyframes.csv`
-- Reads camera intrinsics from `calibration/rgb_camera_info.yaml`
+- Reads camera intrinsics and distortion from the logged mapping image stream camera info
+  (typically `calibration/rgb_camera_info.yaml`)
 - Reads a user-supplied `body -> camera` extrinsic YAML
-- Assumes the logged depth is aligned to the RGB/left optical camera
+- Assumes the logged depth is aligned to the logged mapping image stream
+- For the OAK pipeline here, that aligned pair is `oak/left/image_synced` +
+  `oak/depth`, not `oak/left/image_rect` + `oak/depth`
+- If the logged camera info includes `plumb_bob` or `rational_polynomial`
+  distortion coefficients, they are passed through to `nvblox::Camera`
 - Fuses depth and color into an `nvblox` TSDF map
 - Exports a colored mesh PLY generated from the TSDF
 
@@ -22,6 +27,15 @@ creates CUDA streams during mapper construction.
 ros2 run offline_dense_map_fusion offline_dense_map_fusion_cli \
   --session-dir /tmp/online_mapping_sessions/session_20260321_135348 \
   --body-to-camera-extrinsics /home/max/develop/workspaces/myslam/body_to_oak_left_optical.yaml
+```
+
+The session should have been logged with:
+
+```yaml
+rgb_image_topic: /oak/left/image_synced
+rgb_camera_info_topic: /oak/left/image_synced/camera_info
+depth_image_topic: /oak/depth
+depth_camera_info_topic: /oak/depth/camera_info
 ```
 
 Optional flags:

@@ -176,6 +176,16 @@ CameraIntrinsics loadCamera(const std::filesystem::path &path)
   camera.frame_id = root["header_frame_id"].as<std::string>();
   camera.width = root["width"].as<int>();
   camera.height = root["height"].as<int>();
+  if (root["distortion_model"]) {
+    camera.distortion_model = root["distortion_model"].as<std::string>();
+  }
+  const YAML::Node d = root["d"];
+  if (d && d.IsSequence()) {
+    camera.distortion_coeffs.reserve(d.size());
+    for (size_t i = 0; i < d.size(); ++i) {
+      camera.distortion_coeffs.push_back(d[i].as<double>());
+    }
+  }
 
   const YAML::Node p = root["p"];
   if (p && p.IsSequence() && p.size() == 12) {
@@ -225,7 +235,17 @@ SessionData loadSessionWithOptimizedPoses(const std::filesystem::path &session_d
     }
   }
 
-  session.camera = loadCamera(session_dir / "calibration" / "rgb_camera_info.yaml");
+  const auto rgb_camera_path = session_dir / "calibration" / "rgb_camera_info.yaml";
+  const auto depth_camera_path = session_dir / "calibration" / "depth_camera_info.yaml";
+  if (std::filesystem::exists(rgb_camera_path)) {
+    session.camera = loadCamera(rgb_camera_path);
+  } else if (std::filesystem::exists(depth_camera_path)) {
+    session.camera = loadCamera(depth_camera_path);
+  } else {
+    throw std::runtime_error(
+      "failed to find camera info. Expected one of: " +
+      rgb_camera_path.string() + " or " + depth_camera_path.string());
+  }
 
   std::unordered_map<uint64_t, Pose> optimized_body_poses;
   {
