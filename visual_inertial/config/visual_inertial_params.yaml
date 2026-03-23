@@ -1,4 +1,4 @@
-cuda_gftt_node:
+visual_inertial:
   ros__parameters:
     T_BC_translation: [0.0, 0.05, 0.0]
     T_BC_quaternion_xyzw: [0.5, -0.5, 0.5, -0.5]
@@ -32,7 +32,7 @@ cuda_gftt_node:
     # Track top-up / spatial distribution
     mask_scale: 20
     topup_grid_scale: 24
-    max_total_tracks: 900
+    max_total_tracks: 700
     topup_burst_factor: 2.0
     topup_detect_factor: 3.0
 
@@ -64,7 +64,7 @@ cuda_gftt_node:
     imu_max_buffer_s: 5.0
     imu_keep_anchor: true
 
-visual_inertial_optimization_node:
+visual_inertial_optimization:
   ros__parameters:
     T_BC_translation: [0.0, 0.05, 0.0]
     T_BC_quaternion_xyzw: [0.5, -0.5, 0.5, -0.5]
