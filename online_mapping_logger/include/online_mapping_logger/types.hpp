@@ -7,10 +7,12 @@
 #include <visual_inertial/msg/keyframe.hpp>
 #include <visual_inertial/msg/optimization_result.hpp>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #ifdef ONLINE_MAPPING_LOGGER_HAVE_APRILTAG_MSGS
@@ -61,6 +63,7 @@ struct LoggerConfig
   int64_t rgb_match_tolerance_ns{0};
   int64_t depth_match_tolerance_ns{0};
   int64_t tag_match_tolerance_ns{0};
+  int64_t tag_aggregation_window_ns{0};
   int64_t buffer_duration_ns{0};
   int64_t pending_timeout_ns{0};
   int maintenance_period_ms{250};
@@ -101,14 +104,23 @@ struct PendingKeyframe
   bool have_tags{false};
   TagArrayMsgConstSharedPtr tags_msg;
   int64_t tags_stamp_ns{0};
+  std::vector<std::pair<int64_t, TagArrayMsgConstSharedPtr>> tag_window_msgs;
   struct LoggedTagPose
   {
     std::string family;
     int32_t id{0};
+    int32_t hamming{0};
+    double goodness{0.0};
+    double decision_margin{0.0};
+    std::array<double, 2> centre{0.0, 0.0};
+    std::vector<double> homography;
+    std::vector<std::array<double, 2>> corners;
     std::string detection_frame_id;
     std::string parent_frame_id;
     std::string child_frame_id;
     int64_t lookup_stamp_ns{0};
+    size_t sample_count{0};
+    size_t resolved_sample_count{0};
     bool pose_available{false};
     geometry_msgs::msg::TransformStamped transform;
     std::string lookup_error;

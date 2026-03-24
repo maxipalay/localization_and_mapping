@@ -10,6 +10,8 @@ For the OAK pipeline used in this workspace, the dense-mapping image pair should
 - `depth_image_topic: /oak/depth`
 - `depth_camera_info_topic: /oak/depth/camera_info`
 
+For alternating IR capture, the RGB stream is effectively every other frame, so the logger defaults use a wider RGB match tolerance.
+
 That pair is aligned for dense fusion. `oak/left/image_rect` is not the correct color partner for
 `oak/depth` in this setup.
 

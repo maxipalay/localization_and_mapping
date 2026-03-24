@@ -6,6 +6,7 @@
 #include <map>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace online_mapping_logger
 {
@@ -53,6 +54,26 @@ public:
     }
 
     return std::make_optional(std::make_pair(best_it->first, best_it->second));
+  }
+
+  std::vector<std::pair<int64_t, TValue>> findWithin(
+    int64_t target_stamp_ns,
+    int64_t tolerance_ns) const
+  {
+    std::vector<std::pair<int64_t, TValue>> out;
+    if (buffer_.empty() || tolerance_ns < 0) {
+      return out;
+    }
+
+    const int64_t min_stamp_ns = target_stamp_ns - tolerance_ns;
+    const int64_t max_stamp_ns = target_stamp_ns + tolerance_ns;
+    auto it = buffer_.lower_bound(min_stamp_ns);
+    while (it != buffer_.end() && it->first <= max_stamp_ns) {
+      out.emplace_back(it->first, it->second);
+      ++it;
+    }
+
+    return out;
   }
 
 private:

@@ -214,6 +214,7 @@ void SessionWriter::writeSessionMetadata_()
   os << "  rgb_tolerance_ns: " << config_.rgb_match_tolerance_ns << "\n";
   os << "  depth_tolerance_ns: " << config_.depth_match_tolerance_ns << "\n";
   os << "  tag_tolerance_ns: " << config_.tag_match_tolerance_ns << "\n";
+  os << "  tag_aggregation_window_ns: " << config_.tag_aggregation_window_ns << "\n";
   os << "  buffer_duration_ns: " << config_.buffer_duration_ns << "\n";
   os << "  pending_timeout_ns: " << config_.pending_timeout_ns << "\n";
   os << "requirements:\n";
@@ -338,49 +339,50 @@ std::filesystem::path SessionWriter::writeTags_(
 #ifdef ONLINE_MAPPING_LOGGER_HAVE_APRILTAG_MSGS
   os << "tag_message_type: \"apriltag_msgs/msg/AprilTagDetectionArray\"\n";
   os << "header_stamp_ns: " << pending.tags_stamp_ns << "\n";
-  os << "header_frame_id: \"" << pending.tags_msg->header.frame_id << "\"\n";
+  os << "header_frame_id: \""
+     << (pending.tags_msg ? pending.tags_msg->header.frame_id : std::string())
+     << "\"\n";
+  os << "source_message_count: " << pending.tag_window_msgs.size() << "\n";
   os << "detections:\n";
-  for (size_t idx = 0; idx < pending.tags_msg->detections.size(); ++idx) {
-    const auto &detection = pending.tags_msg->detections[idx];
-    os << "  - family: \"" << detection.family << "\"\n";
-    os << "    id: " << detection.id << "\n";
-    os << "    hamming: " << detection.hamming << "\n";
-    os << "    goodness: " << detection.goodness << "\n";
-    os << "    decision_margin: " << detection.decision_margin << "\n";
-    os << "    centre: [" << detection.centre.x << ", " << detection.centre.y << "]\n";
+  for (const auto &tag_pose : pending.tag_poses) {
+    os << "  - family: \"" << tag_pose.family << "\"\n";
+    os << "    id: " << tag_pose.id << "\n";
+    os << "    sample_count: " << tag_pose.sample_count << "\n";
+    os << "    resolved_sample_count: " << tag_pose.resolved_sample_count << "\n";
+    os << "    hamming: " << tag_pose.hamming << "\n";
+    os << "    goodness: " << tag_pose.goodness << "\n";
+    os << "    decision_margin: " << tag_pose.decision_margin << "\n";
+    os << "    centre: [" << tag_pose.centre[0] << ", " << tag_pose.centre[1] << "]\n";
     os << "    homography: [";
-    for (size_t i = 0; i < detection.homography.size(); ++i) {
+    for (size_t i = 0; i < tag_pose.homography.size(); ++i) {
       if (i > 0) {
         os << ", ";
       }
-      os << detection.homography[i];
+      os << tag_pose.homography[i];
     }
     os << "]\n";
     os << "    corners:\n";
-    for (const auto &corner : detection.corners) {
-      os << "      - [" << corner.x << ", " << corner.y << "]\n";
+    for (const auto &corner : tag_pose.corners) {
+      os << "      - [" << corner[0] << ", " << corner[1] << "]\n";
     }
-    if (idx < pending.tag_poses.size()) {
-      const auto &tag_pose = pending.tag_poses[idx];
-      os << "    tf_pose:\n";
-      os << "      available: " << (tag_pose.pose_available ? "true" : "false") << "\n";
-      os << "      detection_frame_id: \"" << tag_pose.detection_frame_id << "\"\n";
-      os << "      parent_frame_id: \"" << tag_pose.parent_frame_id << "\"\n";
-      os << "      child_frame_id: \"" << tag_pose.child_frame_id << "\"\n";
-      os << "      lookup_stamp_ns: " << tag_pose.lookup_stamp_ns << "\n";
-      if (tag_pose.pose_available) {
-        os << "      translation: ["
-           << tag_pose.transform.transform.translation.x << ", "
-           << tag_pose.transform.transform.translation.y << ", "
-           << tag_pose.transform.transform.translation.z << "]\n";
-        os << "      orientation_xyzw: ["
-           << tag_pose.transform.transform.rotation.x << ", "
-           << tag_pose.transform.transform.rotation.y << ", "
-           << tag_pose.transform.transform.rotation.z << ", "
-           << tag_pose.transform.transform.rotation.w << "]\n";
-      } else {
-        os << "      lookup_error: \"" << tag_pose.lookup_error << "\"\n";
-      }
+    os << "    tf_pose:\n";
+    os << "      available: " << (tag_pose.pose_available ? "true" : "false") << "\n";
+    os << "      detection_frame_id: \"" << tag_pose.detection_frame_id << "\"\n";
+    os << "      parent_frame_id: \"" << tag_pose.parent_frame_id << "\"\n";
+    os << "      child_frame_id: \"" << tag_pose.child_frame_id << "\"\n";
+    os << "      lookup_stamp_ns: " << tag_pose.lookup_stamp_ns << "\n";
+    if (tag_pose.pose_available) {
+      os << "      translation: ["
+         << tag_pose.transform.transform.translation.x << ", "
+         << tag_pose.transform.transform.translation.y << ", "
+         << tag_pose.transform.transform.translation.z << "]\n";
+      os << "      orientation_xyzw: ["
+         << tag_pose.transform.transform.rotation.x << ", "
+         << tag_pose.transform.transform.rotation.y << ", "
+         << tag_pose.transform.transform.rotation.z << ", "
+         << tag_pose.transform.transform.rotation.w << "]\n";
+    } else {
+      os << "      lookup_error: \"" << tag_pose.lookup_error << "\"\n";
     }
   }
 #else
@@ -403,12 +405,7 @@ void SessionWriter::appendManifestLine_(
   const auto tags_rel = tags_path.empty() ? std::string() : relativeTo(tags_path, session_dir_).generic_string();
   const auto meta_rel = relativeTo(keyframe_meta_path, session_dir_).generic_string();
 
-  size_t tag_count = 0;
-#ifdef ONLINE_MAPPING_LOGGER_HAVE_APRILTAG_MSGS
-  if (pending.have_tags && pending.tags_msg) {
-    tag_count = pending.tags_msg->detections.size();
-  }
-#endif
+  const size_t tag_count = pending.tag_poses.size();
 
   manifest_
     << pending.keyframe.kf_id << ","

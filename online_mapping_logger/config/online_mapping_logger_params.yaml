@@ -5,8 +5,8 @@ online_mapping_logger:
     overwrite_existing_session: false
     body_frame_id: body
 
-    rgb_image_topic: /oak/left/image_synced
-    rgb_camera_info_topic: /oak/left/image_synced/camera_info
+    rgb_image_topic: /oak/left/image_synced_ir_off
+    rgb_camera_info_topic: /oak/left/image_synced_ir_off/camera_info
     depth_image_topic: /oak/depth
     depth_camera_info_topic: /oak/depth/camera_info
     keyframe_topic: /keyframes
@@ -16,11 +16,12 @@ online_mapping_logger:
     tag_frame_ids: [1, 2, 3]
     tag_frame_names: [base, object1, object2]
 
-    rgb_match_tolerance_ms: 3.0
+    rgb_match_tolerance_ms: 20.0
     depth_match_tolerance_ms: 50.0
     tag_match_tolerance_ms: 25.0
+    tag_aggregation_window_ms: 75.0
     buffer_duration_s: 5.0
-    pending_timeout_s: 2.0
+    pending_timeout_s: 3.0
     maintenance_period_ms: 250
 
     require_depth: true
