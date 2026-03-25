@@ -5,8 +5,8 @@ online_mapping_logger:
     overwrite_existing_session: false
     body_frame_id: body
 
-    rgb_image_topic: /oak/left/image_synced_ir_off
-    rgb_camera_info_topic: /oak/left/image_synced_ir_off/camera_info
+    rgb_image_topic: /oak/left/image_rect
+    rgb_camera_info_topic: /oak/left/camera_info
     depth_image_topic: /oak/depth
     depth_camera_info_topic: /oak/depth/camera_info
     keyframe_topic: /keyframes
