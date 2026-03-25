@@ -21,7 +21,6 @@
 #include <image_transport/subscriber_filter.hpp>
 #include <message_filters/sync_policies/approximate_time.h>
 #include <message_filters/synchronizer.h>
-#include <message_filters/subscriber.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2/LinearMath/Quaternion.h>
@@ -221,17 +220,29 @@ public:
         sub_left_.subscribe(this, input_topic_left_, transport_, rmw_qos_profile_sensor_data);
         sub_right_.subscribe(this, input_topic_right_, transport_, rmw_qos_profile_sensor_data);
 
-        // CameraInfo subscribers (plain message_filters::Subscriber)
-        sub_left_info_.subscribe(this, left_info_t, rmw_qos_profile_sensor_data);
-        sub_right_info_.subscribe(this, right_info_t, rmw_qos_profile_sensor_data);
+        left_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+            left_info_t,
+            rclcpp::SensorDataQoS(),
+            [this](sensor_msgs::msg::CameraInfo::ConstSharedPtr msg)
+            {
+                std::lock_guard<std::mutex> lk(cam_info_mtx_);
+                last_left_info_ = std::move(msg);
+            });
 
-        // CHANGE: ExactTime -> ApproximateTime (4-way)
+        right_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+            right_info_t,
+            rclcpp::SensorDataQoS(),
+            [this](sensor_msgs::msg::CameraInfo::ConstSharedPtr msg)
+            {
+                std::lock_guard<std::mutex> lk(cam_info_mtx_);
+                last_right_info_ = std::move(msg);
+            });
+
         using SyncPolicy = message_filters::sync_policies::ApproximateTime<
-            sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo,
-            sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo>;
+            sensor_msgs::msg::Image, sensor_msgs::msg::Image>;
 
         sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(
-            SyncPolicy(queue), sub_left_, sub_left_info_, sub_right_, sub_right_info_);
+            SyncPolicy(queue), sub_left_, sub_right_);
 
         // Apply slop/penalty on the policy
         auto policy = sync_->getPolicy(); // NOTE: returns a pointer in your Jazzy build
@@ -239,11 +250,10 @@ public:
         policy->setAgePenalty(age_penalty);
 
         sync_->registerCallback(std::bind(&FeatureNode::cb, this,
-                                          std::placeholders::_1, std::placeholders::_2,
-                                          std::placeholders::_3, std::placeholders::_4));
+                                          std::placeholders::_1, std::placeholders::_2));
 
         RCLCPP_INFO(get_logger(),
-                    "Stereo: L='%s' R='%s' transport='%s' approx: queue=%d slop=%.3fms age_penalty=%.3f",
+                    "Stereo: L='%s' R='%s' transport='%s' image-sync: queue=%d slop=%.3fms age_penalty=%.3f",
                     input_topic_left_.c_str(), input_topic_right_.c_str(), transport_.c_str(),
                     queue, stereo_slop_s * 1e3, age_penalty);
 
@@ -293,12 +303,14 @@ private:
 
     // image subscribers
     image_transport::SubscriberFilter sub_left_{}, sub_right_{};
-    // CameraInfo subscribers (regular message_filters)
-    message_filters::Subscriber<sensor_msgs::msg::CameraInfo> sub_left_info_, sub_right_info_;
+    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_sub_;
+    std::mutex cam_info_mtx_;
+    sensor_msgs::msg::CameraInfo::ConstSharedPtr last_left_info_;
+    sensor_msgs::msg::CameraInfo::ConstSharedPtr last_right_info_;
 
-    // 4-way sync policy: (left_img, left_info, right_img, right_info)
     using SyncPolicy = message_filters::sync_policies::ApproximateTime<
-        sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo>;
+        sensor_msgs::msg::Image, sensor_msgs::msg::Image>;
     std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
 
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
@@ -347,10 +359,22 @@ private:
     }
 
     void cb(const sensor_msgs::msg::Image::ConstSharedPtr &left_msg,
-            const sensor_msgs::msg::CameraInfo::ConstSharedPtr &left_info,
-            const sensor_msgs::msg::Image::ConstSharedPtr &right_msg,
-            const sensor_msgs::msg::CameraInfo::ConstSharedPtr &right_info)
+            const sensor_msgs::msg::Image::ConstSharedPtr &right_msg)
     {
+        sensor_msgs::msg::CameraInfo::ConstSharedPtr left_info;
+        sensor_msgs::msg::CameraInfo::ConstSharedPtr right_info;
+        {
+            std::lock_guard<std::mutex> lk(cam_info_mtx_);
+            left_info = last_left_info_;
+            right_info = last_right_info_;
+        }
+        if (!left_info || !right_info)
+        {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Waiting for left/right CameraInfo before processing stereo pairs");
+            return;
+        }
 
         const double tL = rclcpp::Time(left_msg->header.stamp).seconds();
         const double tR = rclcpp::Time(right_msg->header.stamp).seconds();
