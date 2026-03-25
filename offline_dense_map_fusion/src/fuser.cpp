@@ -170,6 +170,7 @@ FusionResult fuseSession(
     nvblox::WeightingFunctionType::kInverseSquareTsdfDistancePenalty);
   mapper.tsdf_integrator().max_weight(static_cast<float>(config.max_weight));
   mapper.color_integrator().sphere_tracing_ray_subsampling_factor(1);
+  mapper.color_mesh_integrator().weld_vertices(true);
 
   const int stride = std::max(1, config.pixel_stride);
   const int crop = config.crop_border_px;
