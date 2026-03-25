@@ -2,6 +2,7 @@
 
 #include <nvblox/core/color.h>
 #include <nvblox/core/types.h>
+#include <nvblox/integrators/weighting_function.h>
 #include <nvblox/io/mesh_io.h>
 #include <nvblox/mapper/mapper.h>
 #include <nvblox/mapper/mapper_params.h>
@@ -165,6 +166,9 @@ FusionResult fuseSession(
   mapper_params.mesh_integrator_params.mesh_integrator_min_weight =
     static_cast<float>(config.mesh_min_weight);
   mapper.setMapperParams(mapper_params);
+  mapper.tsdf_integrator().weighting_function_type(
+    nvblox::WeightingFunctionType::kInverseSquareTsdfDistancePenalty);
+  mapper.tsdf_integrator().max_weight(static_cast<float>(config.max_weight));
   mapper.color_integrator().sphere_tracing_ray_subsampling_factor(1);
 
   const int stride = std::max(1, config.pixel_stride);
