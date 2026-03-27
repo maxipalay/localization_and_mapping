@@ -81,7 +81,9 @@ OptimizationResult optimizeSession(const SessionData &session, const OptimizerCo
   for (size_t i = 1; i < session.keyframes.size(); ++i) {
     const auto &previous = session.keyframes[i - 1];
     const auto &current = session.keyframes[i];
-    const gtsam::Pose3 measurement = previous.initial_pose_wb.between(current.initial_pose_wb);
+    const gtsam::Pose3 measurement = current.between_pose_prev_curr_body.has_value() ?
+      *current.between_pose_prev_curr_body :
+      previous.initial_pose_wb.between(current.initial_pose_wb);
     graph.add(gtsam::BetweenFactor<gtsam::Pose3>(
       xKey(previous.kf_id), xKey(current.kf_id), measurement, between_noise));
     ++result.between_factor_count;

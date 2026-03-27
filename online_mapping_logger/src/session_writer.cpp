@@ -317,9 +317,13 @@ std::filesystem::path SessionWriter::writeKeyframeMetadata_(
   os << "t_start: " << pending.keyframe.t_start << "\n";
   os << "t_end: " << pending.keyframe.t_end << "\n";
   os << "kf_reason_mask: " << pending.keyframe.kf_reason_mask << "\n";
+  os << "has_vo_between: " << ((pending.keyframe.has_vo_between != 0U) ? "true" : "false") << "\n";
   os << "has_imu: " << static_cast<int>(pending.keyframe.has_imu) << "\n";
   os << "pim_bytes_hex: " << yamlDoubleQuoted(toHex(pending.keyframe.pim_bytes)) << "\n";
   writePoseYaml(os, "frontend_pose_ob", pending.keyframe.pose_odom_body);
+  if (pending.keyframe.has_vo_between != 0U) {
+    writePoseYaml(os, "between_pose_prev_curr_body", pending.keyframe.between_pose_prev_curr);
+  }
   writePoseYaml(os, "optimized_pose_wb", pending.opt_result.pose_wb_opt);
   os << "optimization:\n";
   os << "  t_s: " << pending.opt_result.t_s << "\n";

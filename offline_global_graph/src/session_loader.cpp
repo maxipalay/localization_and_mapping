@@ -190,7 +190,32 @@ int64_t nodeInt64Or(const YAML::Node &node, const std::string &key, int64_t fall
 bool nodeBoolOr(const YAML::Node &node, const std::string &key, bool fallback)
 {
   const auto value = node[key];
-  return value ? value.as<bool>() : fallback;
+  if (!value) {
+    return fallback;
+  }
+
+  try {
+    return value.as<bool>();
+  } catch (const YAML::BadConversion &) {
+  }
+
+  try {
+    return value.as<int>() != 0;
+  } catch (const YAML::BadConversion &) {
+  }
+
+  try {
+    const auto text = value.as<std::string>();
+    if (text == "true" || text == "True" || text == "TRUE" || text == "1") {
+      return true;
+    }
+    if (text == "false" || text == "False" || text == "FALSE" || text == "0") {
+      return false;
+    }
+  } catch (const YAML::BadConversion &) {
+  }
+
+  throw std::runtime_error("failed to parse boolean field '" + key + "'");
 }
 
 gtsam::Pose3 poseFromYamlNode(const YAML::Node &node)
@@ -256,6 +281,31 @@ void loadManifest(SessionData &session)
       }
       return lhs.stamp_ns < rhs.stamp_ns;
     });
+}
+
+void loadKeyframeMetadata(SessionData &session)
+{
+  for (auto &keyframe : session.keyframes) {
+    if (keyframe.keyframe_meta_path.empty() || !std::filesystem::exists(keyframe.keyframe_meta_path)) {
+      continue;
+    }
+
+    const YAML::Node root = YAML::LoadFile(keyframe.keyframe_meta_path.string());
+    const bool has_vo_between = nodeBoolOr(root, "has_vo_between", false);
+    if (!has_vo_between) {
+      continue;
+    }
+
+    YAML::Node between_node = root["between_pose_prev_curr_body"];
+    if (!between_node) {
+      between_node = root["between_pose_prev_curr"];
+    }
+    if (!between_node) {
+      continue;
+    }
+
+    keyframe.between_pose_prev_curr_body = poseFromYamlNode(between_node);
+  }
 }
 
 void loadSessionMetadata(SessionData &session)
@@ -393,6 +443,7 @@ SessionData loadSession(const std::filesystem::path &session_dir)
 
   loadSessionMetadata(session);
   loadManifest(session);
+  loadKeyframeMetadata(session);
   loadTagPriors(session);
   loadTagObservations(session);
 

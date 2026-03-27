@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,7 @@ struct KeyframeRecord
   std::filesystem::path keyframe_meta_path;
   gtsam::Pose3 frontend_pose_wc;
   gtsam::Pose3 initial_pose_wb;
+  std::optional<gtsam::Pose3> between_pose_prev_curr_body;
 };
 
 struct TagObservation
