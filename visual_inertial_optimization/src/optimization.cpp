@@ -330,10 +330,8 @@ std::optional<OptimizationResult> Optimizer::push(
   }
 
   // T_WB_init from incoming camera optical pose:
-  // T_WC = T_WB * T_BC  =>  T_WB = T_WC * T_CB
-  // const Eigen::Isometry3d T_CB = cfg_.T_BC.inverse();
-  // const Eigen::Isometry3d T_WB_init = kf.T_WC * T_CB;
-  const Eigen::Isometry3d T_WB_init = kf.T_WC; // now this field carries odom<-body
+  // Frontend-exported initialization pose in the odom/startup frame (odom <- body).
+  const Eigen::Isometry3d T_OB_init = kf.T_OB;
 
   // Optional bookkeeping prune (count-based window)
   if (cfg_.prune_unobserved_landmarks && cfg_.window_size > 0)
@@ -364,7 +362,7 @@ std::optional<OptimizationResult> Optimizer::push(
   timestamps[bk] = t_now;
 
   // Insert BODY pose initial value
-  newValues.insert(xk, toGtsamPose3_(T_WB_init));
+  newValues.insert(xk, toGtsamPose3_(T_OB_init));
 
   // Insert velocity + bias initials
   gtsam::Vector3 v_init(0.0, 0.0, 0.0);
@@ -400,7 +398,7 @@ std::optional<OptimizationResult> Optimizer::push(
                                    cfg_.prior_trans_sigma_m, cfg_.prior_trans_sigma_m, cfg_.prior_trans_sigma_m)
                                       .finished();
     auto priorNoise = gtsam::noiseModel::Diagonal::Sigmas(sigmas);
-    newFactors.add(gtsam::PriorFactor<gtsam::Pose3>(xk, toGtsamPose3_(T_WB_init), priorNoise));
+    newFactors.add(gtsam::PriorFactor<gtsam::Pose3>(xk, toGtsamPose3_(T_OB_init), priorNoise));
     prior_added++;
 
     // Velocity prior
@@ -465,7 +463,7 @@ std::optional<OptimizationResult> Optimizer::push(
   int landmarks_created = 0;
 
   // Camera pose derived from body init (consistency)
-  const Eigen::Isometry3d T_WC_from_body = T_WB_init * cfg_.T_BC;
+  const Eigen::Isometry3d T_WC_from_body = T_OB_init * cfg_.T_BC;
 
   for (size_t i = 0; i < N; ++i)
   {

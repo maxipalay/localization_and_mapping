@@ -488,9 +488,9 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
         const Eigen::Isometry3d T_BC = params_.T_BC; ///* your calibrated Body<-CamOptical (rot+trans) */;
         const Eigen::Isometry3d T_CB = T_BC.inverse();
-        const Eigen::Isometry3d T_WB_kf = T_BC * vo_pose_abs_ * T_CB;
+        const Eigen::Isometry3d T_OB_kf = T_BC * vo_pose_abs_ * T_CB;
 
-        ev.T_WC = T_WB_kf; // <-- STORE World<-Body in the KF (reuse field for now)
+        ev.T_OB = T_OB_kf;
         if (have_last_kf_cam_pose_abs_)
         {
             ev.has_vo_between = true;

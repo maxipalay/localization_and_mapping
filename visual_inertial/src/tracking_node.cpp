@@ -530,19 +530,19 @@ private:
     {
         visual_inertial::msg::Keyframe msg;
         msg.header.stamp = toStamp(ev.t_end);
-        msg.header.frame_id = "world";
+        msg.header.frame_id = "odom";
         msg.kf_id = ev.kf_id;
         msg.t_start = ev.t_start;
         msg.t_end = ev.t_end;
 
-        msg.pose_wc.position.x = ev.T_WC.translation().x();
-        msg.pose_wc.position.y = ev.T_WC.translation().y();
-        msg.pose_wc.position.z = ev.T_WC.translation().z();
-        Eigen::Quaterniond q(ev.T_WC.rotation());
-        msg.pose_wc.orientation.w = q.w();
-        msg.pose_wc.orientation.x = q.x();
-        msg.pose_wc.orientation.y = q.y();
-        msg.pose_wc.orientation.z = q.z();
+        msg.pose_odom_body.position.x = ev.T_OB.translation().x();
+        msg.pose_odom_body.position.y = ev.T_OB.translation().y();
+        msg.pose_odom_body.position.z = ev.T_OB.translation().z();
+        Eigen::Quaterniond q(ev.T_OB.rotation());
+        msg.pose_odom_body.orientation.w = q.w();
+        msg.pose_odom_body.orientation.x = q.x();
+        msg.pose_odom_body.orientation.y = q.y();
+        msg.pose_odom_body.orientation.z = q.z();
 
         msg.has_vo_between = ev.has_vo_between ? uint8_t{1} : uint8_t{0};
         const Eigen::Quaterniond q_between(ev.T_Bkm1_Bk.rotation());

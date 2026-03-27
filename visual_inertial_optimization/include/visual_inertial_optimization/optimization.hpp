@@ -40,7 +40,7 @@
 // //  * optional gtsam::CombinedImuFactor built from KeyframeEvent pim_bytes
 // //
 // // Notes:
-// // - KeyframeEvent pose is T_WC (World <- CameraOptical). State is T_WB (World <- Body).
+// // - KeyframeEvent pose is T_OB (odom/startup frame <- body).
 // // - Fixed extrinsic cfg.T_BC is (Body <- CameraOptical).
 
 // struct OptimizationConfig

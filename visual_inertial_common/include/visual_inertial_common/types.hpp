@@ -45,8 +45,8 @@ struct KeyframeEvent
     double t_start = 0.0;
     double t_end = 0.0;
 
-    // Pose of the LEFT camera in world coordinates (World <- Camera)
-    Eigen::Isometry3d T_WC = Eigen::Isometry3d::Identity();
+    // Exported frontend pose in the odom/startup frame (Odom <- Body).
+    Eigen::Isometry3d T_OB = Eigen::Isometry3d::Identity();
 
     // Frontend VO relative measurement between consecutive accepted keyframes.
     // Convention matches GTSAM BetweenFactor(x_{k-1}, x_k, meas):

@@ -2,16 +2,16 @@
 # A keyframe event emitted by the frontend at ~1–10 Hz.
 # Arrays are aligned by index: i-th element across arrays belongs to the same track.
 
-std_msgs/Header header          # header.stamp = keyframe time, header.frame_id = "world" (recommended)
+std_msgs/Header header          # header.stamp = keyframe time, header.frame_id = "odom" (recommended)
 
 float32 t_start
 float32 t_end
 
 uint64 kf_id
 
-# Pose of LEFT camera in world coordinates (World <- Camera).
-# i.e., p_world = T_WC * p_cam
-geometry_msgs/Pose pose_wc
+# Exported frontend pose in the odom/startup frame (Odom <- Body).
+# i.e., p_odom = T_OB * p_body
+geometry_msgs/Pose pose_odom_body
 
 # Frontend VO between measurement from previous accepted keyframe body to current body.
 # Convention matches GTSAM BetweenFactor(x_{k-1}, x_k, meas): meas = T_Bkm1_Bk.

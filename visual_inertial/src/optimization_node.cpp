@@ -96,8 +96,8 @@ namespace
         ev.t_start = msg.t_start; // rclcpp::Time(msg.header.stamp).seconds();
         ev.t_end = msg.t_end;
 
-        // Frontend pose: World(odom) <- Camera(LEFT optical)
-        ev.T_WC = poseMsgToIso(msg.pose_wc);
+        // Frontend-exported pose: odom/startup frame <- body
+        ev.T_OB = poseMsgToIso(msg.pose_odom_body);
         ev.has_vo_between = (msg.has_vo_between != 0);
         if (ev.has_vo_between)
         {
@@ -546,13 +546,13 @@ private:
                 optimization_result_pub_->publish(opt_msg);
 
             // Update cached map->odom correction (timer will broadcast it at constant rate)
-            // const Eigen::Isometry3d T_odom_C = poseMsgToIso(msg.pose_wc);
+            // const Eigen::Isometry3d T_odom_C = poseMsgToIso(msg.pose_odom_body);
             // const Eigen::Isometry3d T_map_C = res->T_WC_opt;
-            // const Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_wc); // now odom<-body
+            // const Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_odom_body); // now odom<-body
             // const Eigen::Isometry3d T_map_B = res->T_WB_opt;
 
             // const Eigen::Isometry3d T_map_odom = T_map_B * T_odom_B.inverse();
-            Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_wc); // odom<-body (from KF msg)
+            Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_odom_body); // odom<-body (from KF msg)
             Eigen::Isometry3d T_map_B = res->T_WB_opt;              // map<-body (optimizer)
 
             Eigen::Isometry3d T_map_odom = T_map_B * T_odom_B.inverse();
