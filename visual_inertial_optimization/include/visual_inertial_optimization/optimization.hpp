@@ -306,7 +306,7 @@ public:
 
     std::optional<OptimizationResult> push(
         const KeyframeEvent &kf,
-        const std::optional<Eigen::Isometry3d> &T_Ck_Ckm1 = std::nullopt);
+        const std::optional<Eigen::Isometry3d> &T_Bkm1_Bk_meas = std::nullopt);
 
     // Returns landmark estimates currently available in the smoother.
     // If max_points>0, returns up to max_points, preferring most-recently-seen.

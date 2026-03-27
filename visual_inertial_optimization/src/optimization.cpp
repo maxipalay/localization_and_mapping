@@ -294,7 +294,7 @@ static bool deserializePim_(
 
 std::optional<OptimizationResult> Optimizer::push(
     const KeyframeEvent &kf,
-    const std::optional<Eigen::Isometry3d> &T_Ck_Ckm1)
+    const std::optional<Eigen::Isometry3d> &T_Bkm1_Bk_meas)
 {
   std::lock_guard<std::mutex> lk(mtx_);
 
@@ -419,15 +419,10 @@ std::optional<OptimizationResult> Optimizer::push(
 
   // Optional VO BetweenFactor on BODY poses
   int between_added = 0;
-  if (cfg_.use_vo_between && initialized_ && T_Ck_Ckm1.has_value())
+  if (cfg_.use_vo_between && initialized_ && T_Bkm1_Bk_meas.has_value())
   {
     const gtsam::Key xkm1 = X_(last_kf_id_);
-
-    const Eigen::Isometry3d T_Bk_Bkm1 = *T_Ck_Ckm1;
-
-    // BetweenFactor expects measurement = (Bkm1 <- Bk)
-    const Eigen::Isometry3d T_Bkm1_Bk = T_Bk_Bkm1.inverse();
-    const gtsam::Pose3 meas = toGtsamPose3_(T_Bkm1_Bk);
+    const gtsam::Pose3 meas = toGtsamPose3_(*T_Bkm1_Bk_meas);
 
     const gtsam::Vector6 sigmas = (gtsam::Vector6() << cfg_.between_rot_sigma_rad, cfg_.between_rot_sigma_rad, cfg_.between_rot_sigma_rad,
                                    cfg_.between_trans_sigma_m, cfg_.between_trans_sigma_m, cfg_.between_trans_sigma_m)

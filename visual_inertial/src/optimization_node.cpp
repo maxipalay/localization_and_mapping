@@ -98,6 +98,11 @@ namespace
 
         // Frontend pose: World(odom) <- Camera(LEFT optical)
         ev.T_WC = poseMsgToIso(msg.pose_wc);
+        ev.has_vo_between = (msg.has_vo_between != 0);
+        if (ev.has_vo_between)
+        {
+            ev.T_Bkm1_Bk = poseMsgToIso(msg.between_pose_prev_curr);
+        }
 
         const size_t n = msg.track_ids.size();
         if (msg.u_l.size() != n || msg.v_l.size() != n ||
@@ -484,9 +489,13 @@ private:
             if (ev.ids.empty())
                 continue;
 
-            std::optional<Eigen::Isometry3d> T_Ck_Ckm1 = std::nullopt;
+            std::optional<Eigen::Isometry3d> between_meas = std::nullopt;
+            if (ev.has_vo_between)
+            {
+                between_meas = ev.T_Bkm1_Bk;
+            }
 
-            const auto res = opt->push(ev, T_Ck_Ckm1);
+            const auto res = opt->push(ev, between_meas);
             if (!res)
                 continue;
 

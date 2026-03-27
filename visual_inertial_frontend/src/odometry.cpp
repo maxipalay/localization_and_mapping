@@ -486,8 +486,19 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
         const Eigen::Isometry3d T_BC = params_.T_BC; ///* your calibrated Body<-CamOptical (rot+trans) */;
         const Eigen::Isometry3d T_CB = T_BC.inverse();
+        const Eigen::Isometry3d T_WB_kf = T_BC * vo_pose_abs_ * T_CB;
 
-        ev.T_WC = T_BC * vo_pose_abs_ * T_CB; // <-- STORE World<-Body in the KF (reuse field for now)
+        ev.T_WC = T_WB_kf; // <-- STORE World<-Body in the KF (reuse field for now)
+        if (have_last_kf_body_pose_)
+        {
+            ev.has_vo_between = true;
+            ev.T_Bkm1_Bk = last_kf_body_pose_.inverse() * T_WB_kf;
+        }
+        else
+        {
+            ev.has_vo_between = false;
+            ev.T_Bkm1_Bk = Eigen::Isometry3d::Identity();
+        }
         // v.T_WC = vo_pose_abs_;
 
         // Tracks in deterministic order (same order across ids/pl/pr)
@@ -500,6 +511,8 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         //    (policy stores last-kf pose/time + last-kf ids for overlap logic)
         keyframe_policy_.onKeyframeCreated(ev.kf_id, ev.t_end, vo_pose_abs_, ev.ids);
         output.kf_trigger = true;
+        last_kf_body_pose_ = T_WB_kf;
+        have_last_kf_body_pose_ = true;
 
         // Right before buildAndConsume(...)
         std::cout << std::fixed << std::setprecision(6)

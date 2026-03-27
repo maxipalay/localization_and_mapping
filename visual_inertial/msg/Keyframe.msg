@@ -13,6 +13,11 @@ uint64 kf_id
 # i.e., p_world = T_WC * p_cam
 geometry_msgs/Pose pose_wc
 
+# Frontend VO between measurement from previous accepted keyframe body to current body.
+# Convention matches GTSAM BetweenFactor(x_{k-1}, x_k, meas): meas = T_Bkm1_Bk.
+geometry_msgs/Pose between_pose_prev_curr
+uint8 has_vo_between
+
 # Track observations (aligned arrays)
 uint32[] track_ids
 
@@ -31,4 +36,3 @@ uint32 kf_reason_mask
 # IMU preintegration payload (boost-serialized GTSAM PreintegratedCombinedMeasurements)
 uint8[] pim_bytes
 uint8 has_imu
-

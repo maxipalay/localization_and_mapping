@@ -48,6 +48,12 @@ struct KeyframeEvent
     // Pose of the LEFT camera in world coordinates (World <- Camera)
     Eigen::Isometry3d T_WC = Eigen::Isometry3d::Identity();
 
+    // Frontend VO relative measurement between consecutive accepted keyframes.
+    // Convention matches GTSAM BetweenFactor(x_{k-1}, x_k, meas):
+    // meas = T_Bkm1_Bk.
+    bool has_vo_between = false;
+    Eigen::Isometry3d T_Bkm1_Bk = Eigen::Isometry3d::Identity();
+
     // Tracked features for this keyframe (all vectors aligned by index)
     // ids[i] corresponds to pl[i] and (if available) pr[i].
     std::vector<TrackId> ids;

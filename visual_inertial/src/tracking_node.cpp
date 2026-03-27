@@ -544,6 +544,16 @@ private:
         msg.pose_wc.orientation.y = q.y();
         msg.pose_wc.orientation.z = q.z();
 
+        msg.has_vo_between = ev.has_vo_between ? uint8_t{1} : uint8_t{0};
+        const Eigen::Quaterniond q_between(ev.T_Bkm1_Bk.rotation());
+        msg.between_pose_prev_curr.position.x = ev.T_Bkm1_Bk.translation().x();
+        msg.between_pose_prev_curr.position.y = ev.T_Bkm1_Bk.translation().y();
+        msg.between_pose_prev_curr.position.z = ev.T_Bkm1_Bk.translation().z();
+        msg.between_pose_prev_curr.orientation.w = q_between.w();
+        msg.between_pose_prev_curr.orientation.x = q_between.x();
+        msg.between_pose_prev_curr.orientation.y = q_between.y();
+        msg.between_pose_prev_curr.orientation.z = q_between.z();
+
         const auto N = ev.ids.size();
         msg.track_ids.resize(N);
         msg.u_l.resize(N);
