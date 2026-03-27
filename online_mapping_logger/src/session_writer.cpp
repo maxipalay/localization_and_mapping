@@ -57,6 +57,36 @@ std::string csvEscape(const std::string &value)
   return escaped;
 }
 
+std::string yamlDoubleQuoted(const std::string &value)
+{
+  std::string escaped = "\"";
+  escaped.reserve(value.size() + 2);
+  for (const char c : value) {
+    switch (c) {
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      default:
+        escaped.push_back(c);
+        break;
+    }
+  }
+  escaped.push_back('"');
+  return escaped;
+}
+
 std::filesystem::path relativeTo(
   const std::filesystem::path &path,
   const std::filesystem::path &base)
@@ -93,10 +123,10 @@ void SessionWriter::writeCameraInfo(const CameraInfoMsg &msg, const std::string 
     throw std::runtime_error("failed to open calibration file: " + path.string());
   }
 
-  os << "header_frame_id: \"" << msg.header.frame_id << "\"\n";
+  os << "header_frame_id: " << yamlDoubleQuoted(msg.header.frame_id) << "\n";
   os << "width: " << msg.width << "\n";
   os << "height: " << msg.height << "\n";
-  os << "distortion_model: \"" << msg.distortion_model << "\"\n";
+  os << "distortion_model: " << yamlDoubleQuoted(msg.distortion_model) << "\n";
   writeScalarArray(os, "d", msg.d);
   writeScalarArray(os, "k", msg.k);
   writeScalarArray(os, "r", msg.r);
@@ -197,19 +227,19 @@ void SessionWriter::writeSessionMetadata_()
     throw std::runtime_error("failed to open metadata file: " + metadata_path.string());
   }
 
-  os << "session_name: \"" << config_.session_name << "\"\n";
-  os << "created_at_utc: \"" << nowUtcString() << "\"\n";
+  os << "session_name: " << yamlDoubleQuoted(config_.session_name) << "\n";
+  os << "created_at_utc: " << yamlDoubleQuoted(nowUtcString()) << "\n";
   os << "dataset_version: 1\n";
   os << "frames:\n";
-  os << "  body: \"" << config_.body_frame_id << "\"\n";
+  os << "  body: " << yamlDoubleQuoted(config_.body_frame_id) << "\n";
   os << "topics:\n";
-  os << "  rgb_image: \"" << config_.rgb_image_topic << "\"\n";
-  os << "  rgb_camera_info: \"" << config_.rgb_camera_info_topic << "\"\n";
-  os << "  depth_image: \"" << config_.depth_image_topic << "\"\n";
-  os << "  depth_camera_info: \"" << config_.depth_camera_info_topic << "\"\n";
-  os << "  keyframe: \"" << config_.keyframe_topic << "\"\n";
-  os << "  optimization_result: \"" << config_.optimization_result_topic << "\"\n";
-  os << "  tag: \"" << config_.tag_topic << "\"\n";
+  os << "  rgb_image: " << yamlDoubleQuoted(config_.rgb_image_topic) << "\n";
+  os << "  rgb_camera_info: " << yamlDoubleQuoted(config_.rgb_camera_info_topic) << "\n";
+  os << "  depth_image: " << yamlDoubleQuoted(config_.depth_image_topic) << "\n";
+  os << "  depth_camera_info: " << yamlDoubleQuoted(config_.depth_camera_info_topic) << "\n";
+  os << "  keyframe: " << yamlDoubleQuoted(config_.keyframe_topic) << "\n";
+  os << "  optimization_result: " << yamlDoubleQuoted(config_.optimization_result_topic) << "\n";
+  os << "  tag: " << yamlDoubleQuoted(config_.tag_topic) << "\n";
   os << "matching:\n";
   os << "  rgb_tolerance_ns: " << config_.rgb_match_tolerance_ns << "\n";
   os << "  depth_tolerance_ns: " << config_.depth_match_tolerance_ns << "\n";
@@ -283,12 +313,12 @@ std::filesystem::path SessionWriter::writeKeyframeMetadata_(
 
   os << "kf_id: " << pending.keyframe.kf_id << "\n";
   os << "header_stamp_ns: " << pending.keyframe_stamp_ns << "\n";
-  os << "header_frame_id: \"" << pending.keyframe.header.frame_id << "\"\n";
+  os << "header_frame_id: " << yamlDoubleQuoted(pending.keyframe.header.frame_id) << "\n";
   os << "t_start: " << pending.keyframe.t_start << "\n";
   os << "t_end: " << pending.keyframe.t_end << "\n";
   os << "kf_reason_mask: " << pending.keyframe.kf_reason_mask << "\n";
   os << "has_imu: " << static_cast<int>(pending.keyframe.has_imu) << "\n";
-  os << "pim_bytes_hex: \"" << toHex(pending.keyframe.pim_bytes) << "\"\n";
+  os << "pim_bytes_hex: " << yamlDoubleQuoted(toHex(pending.keyframe.pim_bytes)) << "\n";
   writePoseYaml(os, "frontend_pose_wc", pending.keyframe.pose_wc);
   writePoseYaml(os, "optimized_pose_wb", pending.opt_result.pose_wb_opt);
   os << "optimization:\n";
@@ -303,13 +333,13 @@ std::filesystem::path SessionWriter::writeKeyframeMetadata_(
      << pending.opt_result.gyro_bias.z << "]\n";
 
   os << "associated_files:\n";
-  os << "  rgb_path: \"" << relativeTo(rgb_path, session_dir_).generic_string() << "\"\n";
-  os << "  depth_path: \""
-     << (depth_path.empty() ? std::string() : relativeTo(depth_path, session_dir_).generic_string())
-     << "\"\n";
-  os << "  tags_path: \""
-     << (tags_path.empty() ? std::string() : relativeTo(tags_path, session_dir_).generic_string())
-     << "\"\n";
+  os << "  rgb_path: " << yamlDoubleQuoted(relativeTo(rgb_path, session_dir_).generic_string()) << "\n";
+  os << "  depth_path: "
+     << yamlDoubleQuoted(depth_path.empty() ? std::string() : relativeTo(depth_path, session_dir_).generic_string())
+     << "\n";
+  os << "  tags_path: "
+     << yamlDoubleQuoted(tags_path.empty() ? std::string() : relativeTo(tags_path, session_dir_).generic_string())
+     << "\n";
   os << "associated_stamps_ns:\n";
   os << "  rgb: " << pending.rgb_stamp_ns << "\n";
   os << "  depth: " << pending.depth_stamp_ns << "\n";
@@ -339,13 +369,13 @@ std::filesystem::path SessionWriter::writeTags_(
 #ifdef ONLINE_MAPPING_LOGGER_HAVE_APRILTAG_MSGS
   os << "tag_message_type: \"apriltag_msgs/msg/AprilTagDetectionArray\"\n";
   os << "header_stamp_ns: " << pending.tags_stamp_ns << "\n";
-  os << "header_frame_id: \""
-     << (pending.tags_msg ? pending.tags_msg->header.frame_id : std::string())
-     << "\"\n";
+  os << "header_frame_id: "
+     << yamlDoubleQuoted(pending.tags_msg ? pending.tags_msg->header.frame_id : std::string())
+     << "\n";
   os << "source_message_count: " << pending.tag_window_msgs.size() << "\n";
   os << "detections:\n";
   for (const auto &tag_pose : pending.tag_poses) {
-    os << "  - family: \"" << tag_pose.family << "\"\n";
+    os << "  - family: " << yamlDoubleQuoted(tag_pose.family) << "\n";
     os << "    id: " << tag_pose.id << "\n";
     os << "    sample_count: " << tag_pose.sample_count << "\n";
     os << "    resolved_sample_count: " << tag_pose.resolved_sample_count << "\n";
@@ -367,9 +397,9 @@ std::filesystem::path SessionWriter::writeTags_(
     }
     os << "    tf_pose:\n";
     os << "      available: " << (tag_pose.pose_available ? "true" : "false") << "\n";
-    os << "      detection_frame_id: \"" << tag_pose.detection_frame_id << "\"\n";
-    os << "      parent_frame_id: \"" << tag_pose.parent_frame_id << "\"\n";
-    os << "      child_frame_id: \"" << tag_pose.child_frame_id << "\"\n";
+    os << "      detection_frame_id: " << yamlDoubleQuoted(tag_pose.detection_frame_id) << "\n";
+    os << "      parent_frame_id: " << yamlDoubleQuoted(tag_pose.parent_frame_id) << "\n";
+    os << "      child_frame_id: " << yamlDoubleQuoted(tag_pose.child_frame_id) << "\n";
     os << "      lookup_stamp_ns: " << tag_pose.lookup_stamp_ns << "\n";
     if (tag_pose.pose_available) {
       os << "      translation: ["
@@ -382,7 +412,7 @@ std::filesystem::path SessionWriter::writeTags_(
          << tag_pose.transform.transform.rotation.z << ", "
          << tag_pose.transform.transform.rotation.w << "]\n";
     } else {
-      os << "      lookup_error: \"" << tag_pose.lookup_error << "\"\n";
+      os << "      lookup_error: " << yamlDoubleQuoted(tag_pose.lookup_error) << "\n";
     }
   }
 #else
