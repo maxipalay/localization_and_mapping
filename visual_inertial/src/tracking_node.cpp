@@ -319,12 +319,6 @@ private:
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
 
-    double last_cam_stamp_s_ = 0.0;
-    bool have_cam_stamp_ = false;
-
-    bool have_imu_offset_ = false;
-    double cam_minus_imu_offset_s_ = 0.0; // t_cam = t_imu + cam_minus_imu_offset_s_
-
     // bias updates
     rclcpp::Subscription<visual_inertial::msg::ImuBias>::SharedPtr bias_sub_;
     std::atomic<uint64_t> last_bias_kf_id_{0}; // ignore old bias updates
@@ -439,9 +433,6 @@ private:
         // Convert ROS time to double seconds
         const rclcpp::Time ts = left_msg->header.stamp;
         const double t_curr = ts.seconds();
-
-        last_cam_stamp_s_ = t_curr; // seconds (same thing you use for keyframes)
-        have_cam_stamp_ = true;
 
         auto result = visual_inertial_->processStereo(left_cv->image, right_cv->image, t_curr);
 
@@ -612,19 +603,8 @@ private:
     {
         const double t_imu = rclcpp::Time(msg->header.stamp).seconds();
 
-        if (!have_imu_offset_ && have_cam_stamp_)
-        {
-            cam_minus_imu_offset_s_ = last_cam_stamp_s_ - t_imu;
-            have_imu_offset_ = true;
-            std::cout << std::fixed << std::setprecision(6)
-                      << "[IMU] computed cam_minus_imu_offset_s_=" << cam_minus_imu_offset_s_
-                      << " (cam=" << last_cam_stamp_s_ << " imu=" << t_imu << ")\n";
-        }
-
-        const double t_cam = have_imu_offset_ ? (t_imu + cam_minus_imu_offset_s_) : t_imu;
-
         ImuSample s;
-        s.t_s = t_cam;
+        s.t_s = t_imu;
         s.accel = Eigen::Vector3d(msg->linear_acceleration.x,
                                   msg->linear_acceleration.y,
                                   msg->linear_acceleration.z);
