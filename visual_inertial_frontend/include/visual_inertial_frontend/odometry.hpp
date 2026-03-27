@@ -133,8 +133,8 @@ private:
     Eigen::Isometry3d vo_pose_abs_ = Eigen::Isometry3d::Identity();
     Eigen::Isometry3d ref_kf_pose_abs_ = Eigen::Isometry3d::Identity();
     bool have_ref_kf_ = false;
-    Eigen::Isometry3d last_kf_body_pose_ = Eigen::Isometry3d::Identity();
-    bool have_last_kf_body_pose_ = false;
+    Eigen::Isometry3d last_kf_cam_pose_abs_ = Eigen::Isometry3d::Identity();
+    bool have_last_kf_cam_pose_abs_ = false;
 
     uint64_t next_kf_id_ = 0;
     uint64_t prev_kf_id_ = 0;

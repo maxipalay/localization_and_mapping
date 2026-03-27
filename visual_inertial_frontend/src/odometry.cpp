@@ -414,7 +414,9 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
                 vo_pose_abs_ = ref_kf_pose_abs_ * T_Ck_Cref.inverse();
         }
     }
-    output.vo_pose_rel = pose_prev.inverse() * vo_pose_abs_;
+    const Eigen::Isometry3d T_BC = params_.T_BC;
+    const Eigen::Isometry3d T_CB = T_BC.inverse();
+    output.vo_pose_rel = T_BC * (pose_prev.inverse() * vo_pose_abs_) * T_CB;
 
     // add the tracks up to this point to the output, these are the tracks that helped steer the current update
     // these tracks we born at least on the last frame, and passed our temporal + stereo gates, and the pnp gate
@@ -489,10 +491,11 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         const Eigen::Isometry3d T_WB_kf = T_BC * vo_pose_abs_ * T_CB;
 
         ev.T_WC = T_WB_kf; // <-- STORE World<-Body in the KF (reuse field for now)
-        if (have_last_kf_body_pose_)
+        if (have_last_kf_cam_pose_abs_)
         {
             ev.has_vo_between = true;
-            ev.T_Bkm1_Bk = last_kf_body_pose_.inverse() * T_WB_kf;
+            const Eigen::Isometry3d T_Ckm1_Ck = last_kf_cam_pose_abs_.inverse() * vo_pose_abs_;
+            ev.T_Bkm1_Bk = T_BC * T_Ckm1_Ck * T_CB;
         }
         else
         {
@@ -511,8 +514,8 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         //    (policy stores last-kf pose/time + last-kf ids for overlap logic)
         keyframe_policy_.onKeyframeCreated(ev.kf_id, ev.t_end, vo_pose_abs_, ev.ids);
         output.kf_trigger = true;
-        last_kf_body_pose_ = T_WB_kf;
-        have_last_kf_body_pose_ = true;
+        last_kf_cam_pose_abs_ = vo_pose_abs_;
+        have_last_kf_cam_pose_abs_ = true;
 
         // Right before buildAndConsume(...)
         std::cout << std::fixed << std::setprecision(6)
@@ -597,9 +600,6 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     }
 
     // SECTION - FILL OUTPUT POSE ABS
-
-    const Eigen::Isometry3d T_BC = params_.T_BC; ///* your calibrated Body<-CamOptical (rot+trans) */;
-    const Eigen::Isometry3d T_CB = T_BC.inverse();
 
     output.vo_pose_abs = T_BC * vo_pose_abs_ * T_CB;
 
