@@ -319,7 +319,7 @@ std::filesystem::path SessionWriter::writeKeyframeMetadata_(
   os << "kf_reason_mask: " << pending.keyframe.kf_reason_mask << "\n";
   os << "has_imu: " << static_cast<int>(pending.keyframe.has_imu) << "\n";
   os << "pim_bytes_hex: " << yamlDoubleQuoted(toHex(pending.keyframe.pim_bytes)) << "\n";
-  writePoseYaml(os, "frontend_pose_wc", pending.keyframe.pose_wc);
+  writePoseYaml(os, "frontend_pose_ob", pending.keyframe.pose_odom_body);
   writePoseYaml(os, "optimized_pose_wb", pending.opt_result.pose_wb_opt);
   os << "optimization:\n";
   os << "  t_s: " << pending.opt_result.t_s << "\n";
@@ -447,13 +447,13 @@ void SessionWriter::appendManifestLine_(
     << csvEscape(depth_rel) << ","
     << csvEscape(tags_rel) << ","
     << csvEscape(meta_rel) << ","
-    << pending.keyframe.pose_wc.position.x << ","
-    << pending.keyframe.pose_wc.position.y << ","
-    << pending.keyframe.pose_wc.position.z << ","
-    << pending.keyframe.pose_wc.orientation.x << ","
-    << pending.keyframe.pose_wc.orientation.y << ","
-    << pending.keyframe.pose_wc.orientation.z << ","
-    << pending.keyframe.pose_wc.orientation.w << ","
+    << pending.keyframe.pose_odom_body.position.x << ","
+    << pending.keyframe.pose_odom_body.position.y << ","
+    << pending.keyframe.pose_odom_body.position.z << ","
+    << pending.keyframe.pose_odom_body.orientation.x << ","
+    << pending.keyframe.pose_odom_body.orientation.y << ","
+    << pending.keyframe.pose_odom_body.orientation.z << ","
+    << pending.keyframe.pose_odom_body.orientation.w << ","
     << pending.opt_result.pose_wb_opt.position.x << ","
     << pending.opt_result.pose_wb_opt.position.y << ","
     << pending.opt_result.pose_wb_opt.position.z << ","
