@@ -237,6 +237,7 @@ struct OptimizationConfig
     CameraRig rig;
 
     double stereo_sigma_px = 1.0;
+    double stereo_huber_k = 1.345;
 
     double prior_rot_sigma_rad = 5.0 * M_PI / 180.0;
     double prior_trans_sigma_m = 0.25;
@@ -249,6 +250,7 @@ struct OptimizationConfig
     bool use_vo_between = true;
     double between_rot_sigma_rad = 3.0 * M_PI / 180.0;
     double between_trans_sigma_m = 0.10;
+    double between_huber_k = 1.345;
 
     bool use_imu = true;
 

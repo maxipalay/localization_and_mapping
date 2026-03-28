@@ -264,6 +264,19 @@ static inline Eigen::Vector3d triangulateStereoInLeftCam_(
   return Eigen::Vector3d(X, Y, Z);
 }
 
+static gtsam::SharedNoiseModel maybeHuberize_(
+    const gtsam::SharedNoiseModel &base_noise,
+    double huber_k)
+{
+  if (huber_k <= 0.0)
+  {
+    return base_noise;
+  }
+  return gtsam::noiseModel::Robust::Create(
+      gtsam::noiseModel::mEstimator::Huber::Create(huber_k),
+      base_noise);
+}
+
 static bool deserializePim_(
     const std::vector<uint8_t> &bytes,
     gtsam::PreintegratedCombinedMeasurements *out)
@@ -425,7 +438,9 @@ std::optional<OptimizationResult> Optimizer::push(
     const gtsam::Vector6 sigmas = (gtsam::Vector6() << cfg_.between_rot_sigma_rad, cfg_.between_rot_sigma_rad, cfg_.between_rot_sigma_rad,
                                    cfg_.between_trans_sigma_m, cfg_.between_trans_sigma_m, cfg_.between_trans_sigma_m)
                                       .finished();
-    auto betweenNoise = gtsam::noiseModel::Diagonal::Sigmas(sigmas);
+    auto betweenNoise = maybeHuberize_(
+        gtsam::noiseModel::Diagonal::Sigmas(sigmas),
+        cfg_.between_huber_k);
 
     newFactors.add(gtsam::BetweenFactor<gtsam::Pose3>(xkm1, xk, meas, betweenNoise));
     between_added = 1;
@@ -449,7 +464,9 @@ std::optional<OptimizationResult> Optimizer::push(
         pim));
   }
 
-  auto stereoNoise = gtsam::noiseModel::Isotropic::Sigma(3, cfg_.stereo_sigma_px);
+  auto stereoNoise = maybeHuberize_(
+      gtsam::noiseModel::Isotropic::Sigma(3, cfg_.stereo_sigma_px),
+      cfg_.stereo_huber_k);
   using StereoFactor = gtsam::GenericStereoFactor<gtsam::Pose3, gtsam::Point3>;
 
   const auto &Lcam = cfg_.rig.left;

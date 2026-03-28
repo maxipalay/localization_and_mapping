@@ -19,7 +19,7 @@ visual_inertial:
     child_frame_id: body
 
     # VisualInertial core
-    target_features: 600
+    target_features: 450
     stereo_epi_eps_y: 1.5
     stereo_disp_min: 3.0
     stereo_disp_max: 255.0
@@ -32,7 +32,7 @@ visual_inertial:
     # Track top-up / spatial distribution
     mask_scale: 20
     topup_grid_scale: 24
-    max_total_tracks: 700
+    max_total_tracks: 500
     topup_burst_factor: 2.0
     topup_detect_factor: 3.0
 
@@ -44,10 +44,10 @@ visual_inertial:
     pnp_refine_eps: 1e-6
 
     # Keyframe policy
-    kf_min_dt_s: 0.20
+    kf_min_dt_s: 0.2
     kf_max_dt_s: 1.00
-    kf_min_trans_m: 0.1
-    kf_min_rot_deg: 10.0
+    kf_min_trans_m: 0.05
+    kf_min_rot_deg: 5.0
     kf_min_tracks: 120
     kf_min_pnp_tracks: 100
     kf_min_shared_tracks: 90
@@ -79,8 +79,9 @@ visual_inertial_optimization:
     tf_pub_rate_hz: 30.0
 
     # Backend config
-    window_size: 20
-    stereo_sigma_px: 0.8
+    window_size: 10
+    stereo_sigma_px: 0.6
+    stereo_huber_k: 1.345
     prior_rot_sigma_rad: 0.05
     prior_trans_sigma_m: 0.05
     vel_prior_sigma: 0.1
@@ -88,8 +89,9 @@ visual_inertial_optimization:
     bias_gyro_prior_sigma: 0.1
 
     use_vo_between: true
-    between_rot_sigma_rad: 0.0523599 # 3 deg
-    between_trans_sigma_m: 0.05
+    between_rot_sigma_rad: 0.08 # 3 deg
+    between_trans_sigma_m: 0.08
+    between_huber_k: 1.345
 
     use_imu: true
 
@@ -103,12 +105,12 @@ visual_inertial_optimization:
     optimization_result_topic: optimization_result
 
     # Landmark publishing
-    publish_optimized_landmarks: true
+    publish_optimized_landmarks: false
     landmark_topic: optimized_landmarks
     landmark_pub_hz: 2.0
 
     # TF smoothing
-    smooth_tau_s: 0.1
+    smooth_tau_s: 0.0
     publish_tf_hz: 30.0
 
     # Landmark cache limits

@@ -189,6 +189,7 @@ public:
         // Backend config params
         cfg_.window_size = static_cast<size_t>(declare_parameter<int>("window_size", 8));
         cfg_.stereo_sigma_px = declare_parameter<double>("stereo_sigma_px", 1.0);
+        cfg_.stereo_huber_k = declare_parameter<double>("stereo_huber_k", cfg_.stereo_huber_k);
 
         cfg_.prior_rot_sigma_rad = declare_parameter<double>("prior_rot_sigma_rad", cfg_.prior_rot_sigma_rad);
         cfg_.prior_trans_sigma_m = declare_parameter<double>("prior_trans_sigma_m", cfg_.prior_trans_sigma_m);
@@ -200,6 +201,7 @@ public:
         cfg_.use_vo_between = declare_parameter<bool>("use_vo_between", cfg_.use_vo_between);
         cfg_.between_rot_sigma_rad = declare_parameter<double>("between_rot_sigma_rad", cfg_.between_rot_sigma_rad);
         cfg_.between_trans_sigma_m = declare_parameter<double>("between_trans_sigma_m", cfg_.between_trans_sigma_m);
+        cfg_.between_huber_k = declare_parameter<double>("between_huber_k", cfg_.between_huber_k);
 
         cfg_.use_imu = declare_parameter<bool>("use_imu", cfg_.use_imu);
 
@@ -495,9 +497,22 @@ private:
                 between_meas = ev.T_Bkm1_Bk;
             }
 
+            const auto optimize_start = std::chrono::steady_clock::now();
             const auto res = opt->push(ev, between_meas);
+            const auto optimize_end = std::chrono::steady_clock::now();
+            const double optimize_ms =
+                std::chrono::duration<double, std::milli>(optimize_end - optimize_start).count();
             if (!res)
                 continue;
+
+            RCLCPP_INFO(
+                get_logger(),
+                "Optimization update kf_id=%lu took %.1f ms (window=%d stereo_factors=%d between_factors=%d)",
+                static_cast<unsigned long>(res->kf_id),
+                optimize_ms,
+                res->stats.num_keyframes_in_window,
+                res->stats.num_stereo_factors_added,
+                res->stats.num_between_factors_added);
 
             // ---- Update persistent landmark cache ----
             {
