@@ -19,7 +19,7 @@ visual_inertial:
     child_frame_id: body
 
     # VisualInertial core
-    target_features: 450
+    target_features: 350
     stereo_epi_eps_y: 1.5
     stereo_disp_min: 3.0
     stereo_disp_max: 255.0
@@ -32,7 +32,7 @@ visual_inertial:
     # Track top-up / spatial distribution
     mask_scale: 20
     topup_grid_scale: 24
-    max_total_tracks: 500
+    max_total_tracks: 300
     topup_burst_factor: 2.0
     topup_detect_factor: 3.0
 
@@ -79,7 +79,7 @@ visual_inertial_optimization:
     tf_pub_rate_hz: 30.0
 
     # Backend config
-    window_size: 10
+    window_size: 20
     stereo_sigma_px: 0.6
     stereo_huber_k: 1.345
     prior_rot_sigma_rad: 0.05
