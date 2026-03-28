@@ -104,6 +104,8 @@ void writeOptimizationOutputs(
   summary_os << "between_factor_count: " << result.between_factor_count << "\n";
   summary_os << "tag_observation_factor_count: " << result.tag_observation_factor_count << "\n";
   summary_os << "prior_factor_count: " << result.prior_factor_count << "\n";
+  summary_os << "visual_factor_count: " << result.visual_factor_count << "\n";
+  summary_os << "landmark_count: " << result.landmark_count << "\n";
   summary_os << "initial_error: " << result.initial_error << "\n";
   summary_os << "final_error: " << result.final_error << "\n";
   summary_os << "anchor_strategy: \"" << result.anchor_strategy << "\"\n";

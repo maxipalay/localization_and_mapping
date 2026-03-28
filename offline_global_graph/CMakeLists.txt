@@ -8,6 +8,7 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 find_package(ament_cmake REQUIRED)
 find_package(GTSAM REQUIRED)
+find_package(OpenCV REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 add_library(${PROJECT_NAME}_core
@@ -21,11 +22,13 @@ set(_offline_global_graph_gtsam_eigen "${GTSAM_INCLUDE_DIR}/gtsam/3rdparty/Eigen
 target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+  ${OpenCV_INCLUDE_DIRS}
   ${_offline_global_graph_gtsam_eigen}
 )
 
 target_link_libraries(${PROJECT_NAME}_core
   gtsam
+  ${OpenCV_LIBS}
   yaml-cpp
 )
 

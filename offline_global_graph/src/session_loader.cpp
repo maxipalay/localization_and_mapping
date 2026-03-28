@@ -237,6 +237,51 @@ gtsam::Pose3 poseFromYamlNode(const YAML::Node &node)
     quaternion[3].as<double>());
 }
 
+template <typename T>
+std::vector<T> nodeScalarArray(const YAML::Node &node, const std::string &key)
+{
+  std::vector<T> out;
+  const auto value = node[key];
+  if (!value || !value.IsSequence()) {
+    return out;
+  }
+  out.reserve(value.size());
+  for (const auto &entry : value) {
+    out.push_back(entry.as<T>());
+  }
+  return out;
+}
+
+void loadCameraCalibration(SessionData &session)
+{
+  const auto camera_info_path = session.session_dir / "calibration" / "rgb_camera_info.yaml";
+  if (!std::filesystem::exists(camera_info_path)) {
+    return;
+  }
+
+  const YAML::Node root = YAML::LoadFile(camera_info_path.string());
+  session.camera.width = root["width"] ? root["width"].as<int>() : 0;
+  session.camera.height = root["height"] ? root["height"].as<int>() : 0;
+  session.camera.frame_id = nodeStringOr(root, "header_frame_id", "");
+
+  const auto p = root["p"];
+  if (p && p.IsSequence() && p.size() == 12) {
+    session.camera.fx = p[0].as<double>();
+    session.camera.fy = p[5].as<double>();
+    session.camera.cx = p[2].as<double>();
+    session.camera.cy = p[6].as<double>();
+    return;
+  }
+
+  const auto k = root["k"];
+  if (k && k.IsSequence() && k.size() == 9) {
+    session.camera.fx = k[0].as<double>();
+    session.camera.fy = k[4].as<double>();
+    session.camera.cx = k[2].as<double>();
+    session.camera.cy = k[5].as<double>();
+  }
+}
+
 void loadManifest(SessionData &session)
 {
   const auto manifest_path = session.session_dir / "keyframe_manifest.csv";
@@ -301,10 +346,40 @@ void loadKeyframeMetadata(SessionData &session)
       between_node = root["between_pose_prev_curr"];
     }
     if (!between_node) {
+    } else {
+      keyframe.between_pose_prev_curr_body = poseFromYamlNode(between_node);
+    }
+
+    const auto tracks = root["tracks"];
+    if (!tracks) {
       continue;
     }
 
-    keyframe.between_pose_prev_curr_body = poseFromYamlNode(between_node);
+    const auto track_ids = nodeScalarArray<uint32_t>(tracks, "track_ids");
+    const auto u_l = nodeScalarArray<float>(tracks, "u_l");
+    const auto v_l = nodeScalarArray<float>(tracks, "v_l");
+    const auto u_r = nodeScalarArray<float>(tracks, "u_r");
+    const auto v_r = nodeScalarArray<float>(tracks, "v_r");
+    const auto has_right = nodeScalarArray<int>(tracks, "has_right");
+
+    const size_t n = track_ids.size();
+    if (n == 0 || u_l.size() != n || v_l.size() != n || u_r.size() != n || v_r.size() != n ||
+        has_right.size() != n) {
+      continue;
+    }
+
+    keyframe.track_observations.clear();
+    keyframe.track_observations.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+      KeyframeRecord::TrackObservation observation;
+      observation.track_id = track_ids[i];
+      observation.u_l = u_l[i];
+      observation.v_l = v_l[i];
+      observation.u_r = u_r[i];
+      observation.v_r = v_r[i];
+      observation.has_right = (has_right[i] != 0);
+      keyframe.track_observations.push_back(observation);
+    }
   }
 }
 
@@ -442,6 +517,7 @@ SessionData loadSession(const std::filesystem::path &session_dir)
   }
 
   loadSessionMetadata(session);
+  loadCameraCalibration(session);
   loadManifest(session);
   loadKeyframeMetadata(session);
   loadTagPriors(session);

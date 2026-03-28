@@ -22,6 +22,27 @@ struct KeyframeRecord
   gtsam::Pose3 frontend_pose_wc;
   gtsam::Pose3 initial_pose_wb;
   std::optional<gtsam::Pose3> between_pose_prev_curr_body;
+  struct TrackObservation
+  {
+    uint32_t track_id{0};
+    float u_l{0.0f};
+    float v_l{0.0f};
+    float u_r{0.0f};
+    float v_r{0.0f};
+    bool has_right{false};
+  };
+  std::vector<TrackObservation> track_observations;
+};
+
+struct CameraIntrinsics
+{
+  int width{0};
+  int height{0};
+  double fx{0.0};
+  double fy{0.0};
+  double cx{0.0};
+  double cy{0.0};
+  std::string frame_id;
 };
 
 struct TagObservation
@@ -53,6 +74,7 @@ struct SessionData
   std::filesystem::path session_dir;
   std::string session_name;
   std::string body_frame_id{"body"};
+  CameraIntrinsics camera;
   std::vector<KeyframeRecord> keyframes;
   std::vector<TagObservation> tag_observations;
   std::vector<TagPrior> tag_priors;
@@ -71,7 +93,19 @@ struct OptimizerConfig
   double soft_prior_rotation_sigma_rad{0.20};
   double anchor_translation_sigma_m{0.01};
   double anchor_rotation_sigma_rad{0.01};
+  bool anchor_all_tag_priors{true};
+  double max_tag_translation_deviation_m{0.10};
+  bool enforce_max_tag_translation_deviation{true};
   double robust_huber_k{1.345};
+  double tag_observation_huber_k{0.0};
+  bool use_visual_factors{false};
+  gtsam::Pose3 body_T_camera;
+  double visual_sigma_px{1.0};
+  double visual_huber_k{1.345};
+  double depth_scale{0.001};
+  double min_depth_m{0.3};
+  double max_depth_m{6.0};
+  int min_track_observations{2};
 };
 
 struct OptimizationResult
@@ -83,6 +117,8 @@ struct OptimizationResult
   size_t between_factor_count{0};
   size_t tag_observation_factor_count{0};
   size_t prior_factor_count{0};
+  size_t visual_factor_count{0};
+  size_t landmark_count{0};
   std::string anchor_strategy;
 };
 

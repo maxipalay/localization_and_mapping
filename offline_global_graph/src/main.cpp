@@ -2,6 +2,8 @@
 #include "offline_global_graph/optimizer.hpp"
 #include "offline_global_graph/session_loader.hpp"
 
+#include <yaml-cpp/yaml.h>
+
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -31,6 +33,13 @@ void printUsage()
     << "       [--tag-translation-sigma FLOAT] [--tag-rotation-sigma FLOAT]\n"
     << "       [--soft-prior-translation-sigma FLOAT] [--soft-prior-rotation-sigma FLOAT]\n"
     << "       [--anchor-translation-sigma FLOAT] [--anchor-rotation-sigma FLOAT]\n"
+    << "       [--anchor-all-tag-priors] [--no-anchor-all-tag-priors]\n"
+    << "       [--max-tag-translation-deviation FLOAT] [--disable-max-tag-translation-deviation-check]\n"
+    << "       [--tag-observation-huber-k FLOAT]\n"
+    << "       [--body-to-camera-extrinsics PATH]\n"
+    << "       [--visual-sigma-px FLOAT] [--visual-huber-k FLOAT]\n"
+    << "       [--depth-scale FLOAT] [--min-depth FLOAT] [--max-depth FLOAT]\n"
+    << "       [--min-track-observations INTEGER]\n"
     << "       [--robust-huber-k FLOAT]\n";
 }
 
@@ -59,6 +68,29 @@ std::string requireValue(int argc, char **argv, int &index, const char *flag)
   }
   ++index;
   return argv[index];
+}
+
+gtsam::Pose3 loadBodyToCameraExtrinsics(const std::filesystem::path &path)
+{
+  const YAML::Node root = YAML::LoadFile(path.string());
+  const YAML::Node pose_node = root["body_T_camera"] ? root["body_T_camera"] : root;
+  const YAML::Node position = pose_node["position"] ? pose_node["position"] : pose_node["translation"];
+  const YAML::Node quat = pose_node["orientation_xyzw"];
+  if (!position || !quat || !position.IsSequence() || !quat.IsSequence() ||
+      position.size() != 3 || quat.size() != 4) {
+    throw std::runtime_error("extrinsics YAML must contain position/translation[3] and orientation_xyzw[4]");
+  }
+
+  return gtsam::Pose3(
+    gtsam::Rot3::Quaternion(
+      quat[3].as<double>(),
+      quat[0].as<double>(),
+      quat[1].as<double>(),
+      quat[2].as<double>()),
+    gtsam::Point3(
+      position[0].as<double>(),
+      position[1].as<double>(),
+      position[2].as<double>()));
 }
 
 bool tagAllowed(
@@ -145,6 +177,42 @@ int main(int argc, char **argv)
       } else if (arg == "--anchor-rotation-sigma") {
         cli_config.optimizer_config.anchor_rotation_sigma_rad =
           parseCliDouble(requireValue(argc, argv, i, "--anchor-rotation-sigma"), "--anchor-rotation-sigma");
+      } else if (arg == "--anchor-all-tag-priors") {
+        cli_config.optimizer_config.anchor_all_tag_priors = true;
+      } else if (arg == "--no-anchor-all-tag-priors") {
+        cli_config.optimizer_config.anchor_all_tag_priors = false;
+      } else if (arg == "--max-tag-translation-deviation") {
+        cli_config.optimizer_config.max_tag_translation_deviation_m =
+          parseCliDouble(
+          requireValue(argc, argv, i, "--max-tag-translation-deviation"),
+          "--max-tag-translation-deviation");
+      } else if (arg == "--disable-max-tag-translation-deviation-check") {
+        cli_config.optimizer_config.enforce_max_tag_translation_deviation = false;
+      } else if (arg == "--tag-observation-huber-k") {
+        cli_config.optimizer_config.tag_observation_huber_k =
+          parseCliDouble(requireValue(argc, argv, i, "--tag-observation-huber-k"), "--tag-observation-huber-k");
+      } else if (arg == "--body-to-camera-extrinsics") {
+        cli_config.optimizer_config.body_T_camera =
+          loadBodyToCameraExtrinsics(requireValue(argc, argv, i, "--body-to-camera-extrinsics"));
+        cli_config.optimizer_config.use_visual_factors = true;
+      } else if (arg == "--visual-sigma-px") {
+        cli_config.optimizer_config.visual_sigma_px =
+          parseCliDouble(requireValue(argc, argv, i, "--visual-sigma-px"), "--visual-sigma-px");
+      } else if (arg == "--visual-huber-k") {
+        cli_config.optimizer_config.visual_huber_k =
+          parseCliDouble(requireValue(argc, argv, i, "--visual-huber-k"), "--visual-huber-k");
+      } else if (arg == "--depth-scale") {
+        cli_config.optimizer_config.depth_scale =
+          parseCliDouble(requireValue(argc, argv, i, "--depth-scale"), "--depth-scale");
+      } else if (arg == "--min-depth") {
+        cli_config.optimizer_config.min_depth_m =
+          parseCliDouble(requireValue(argc, argv, i, "--min-depth"), "--min-depth");
+      } else if (arg == "--max-depth") {
+        cli_config.optimizer_config.max_depth_m =
+          parseCliDouble(requireValue(argc, argv, i, "--max-depth"), "--max-depth");
+      } else if (arg == "--min-track-observations") {
+        cli_config.optimizer_config.min_track_observations =
+          parseCliInt(requireValue(argc, argv, i, "--min-track-observations"), "--min-track-observations");
       } else if (arg == "--robust-huber-k") {
         cli_config.optimizer_config.robust_huber_k =
           parseCliDouble(requireValue(argc, argv, i, "--robust-huber-k"), "--robust-huber-k");
@@ -175,6 +243,8 @@ int main(int argc, char **argv)
       << "  keyframes: " << result.optimized_keyframes.size() << "\n"
       << "  tags: " << result.optimized_tags.size() << "\n"
       << "  tag_observations_used: " << session.tag_observations.size() << "\n"
+      << "  visual_factors_used: " << result.visual_factor_count << "\n"
+      << "  landmarks_used: " << result.landmark_count << "\n"
       << "  initial_error: " << result.initial_error << "\n"
       << "  final_error: " << result.final_error << "\n"
       << "  anchor_strategy: " << result.anchor_strategy << "\n"

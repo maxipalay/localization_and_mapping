@@ -11,6 +11,8 @@
 
   <build_depend>gtsam</build_depend>
   <exec_depend>gtsam</exec_depend>
+  <build_depend>opencv</build_depend>
+  <exec_depend>opencv</exec_depend>
   <build_depend>yaml-cpp</build_depend>
   <exec_depend>yaml-cpp</exec_depend>
 
