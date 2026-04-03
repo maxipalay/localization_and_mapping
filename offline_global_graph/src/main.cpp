@@ -37,6 +37,7 @@ void printUsage()
     << "       [--max-tag-translation-deviation FLOAT] [--disable-max-tag-translation-deviation-check]\n"
     << "       [--tag-observation-huber-k FLOAT]\n"
     << "       [--body-to-camera-extrinsics PATH]\n"
+    << "       [--stereo-baseline-m FLOAT]\n"
     << "       [--visual-sigma-px FLOAT] [--visual-huber-k FLOAT]\n"
     << "       [--depth-scale FLOAT] [--min-depth FLOAT] [--max-depth FLOAT]\n"
     << "       [--min-track-observations INTEGER]\n"
@@ -201,6 +202,9 @@ int main(int argc, char **argv)
       } else if (arg == "--visual-huber-k") {
         cli_config.optimizer_config.visual_huber_k =
           parseCliDouble(requireValue(argc, argv, i, "--visual-huber-k"), "--visual-huber-k");
+      } else if (arg == "--stereo-baseline-m") {
+        cli_config.optimizer_config.stereo_baseline_m =
+          parseCliDouble(requireValue(argc, argv, i, "--stereo-baseline-m"), "--stereo-baseline-m");
       } else if (arg == "--depth-scale") {
         cli_config.optimizer_config.depth_scale =
           parseCliDouble(requireValue(argc, argv, i, "--depth-scale"), "--depth-scale");
@@ -231,6 +235,12 @@ int main(int argc, char **argv)
 
     auto session = offline_global_graph::loadSession(cli_config.session_dir);
     session = filterSessionByTags(session, cli_config.only_tag_ids, cli_config.exclude_tag_ids);
+    if (cli_config.optimizer_config.use_visual_factors &&
+        cli_config.optimizer_config.stereo_baseline_m <= 0.0) {
+      throw std::runtime_error(
+        "visual factors now initialize landmarks from stereo disparity; "
+        "pass --stereo-baseline-m with the left-right baseline in meters");
+    }
     if (cli_config.output_dir.empty()) {
       cli_config.output_dir = cli_config.session_dir / "offline_global_graph";
     }

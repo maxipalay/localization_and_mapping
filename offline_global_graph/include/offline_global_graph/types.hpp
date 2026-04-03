@@ -102,6 +102,7 @@ struct OptimizerConfig
   gtsam::Pose3 body_T_camera;
   double visual_sigma_px{1.0};
   double visual_huber_k{1.345};
+  double stereo_baseline_m{0.0};
   double depth_scale{0.001};
   double min_depth_m{0.3};
   double max_depth_m{6.0};

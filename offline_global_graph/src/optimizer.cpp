@@ -10,8 +10,6 @@
 #include <gtsam/slam/ProjectionFactor.h>
 #include <gtsam/linear/NoiseModel.h>
 
-#include <opencv2/imgcodecs.hpp>
-
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -101,57 +99,6 @@ gtsam::Pose3 betweenMeasurementForAdjacentKeyframes(
     return *current.between_pose_prev_curr_body;
   }
   return previous.initial_pose_wb.between(current.initial_pose_wb);
-}
-
-std::optional<double> sampleDepthMeters(
-  const cv::Mat &depth,
-  int x,
-  int y,
-  double depth_scale,
-  double min_depth_m,
-  double max_depth_m)
-{
-  if (x < 0 || y < 0 || x >= depth.cols || y >= depth.rows) {
-    return std::nullopt;
-  }
-
-  std::vector<double> samples;
-  samples.reserve(9);
-  for (int dy = -1; dy <= 1; ++dy) {
-    for (int dx = -1; dx <= 1; ++dx) {
-      const int xx = x + dx;
-      const int yy = y + dy;
-      if (xx < 0 || yy < 0 || xx >= depth.cols || yy >= depth.rows) {
-        continue;
-      }
-
-      double depth_m = 0.0;
-      switch (depth.type()) {
-        case CV_16UC1:
-          depth_m = static_cast<double>(depth.at<uint16_t>(yy, xx)) * depth_scale;
-          break;
-        case CV_32FC1:
-          depth_m = static_cast<double>(depth.at<float>(yy, xx)) * depth_scale;
-          break;
-        case CV_64FC1:
-          depth_m = depth.at<double>(yy, xx) * depth_scale;
-          break;
-        default:
-          throw std::runtime_error("unsupported depth image type");
-      }
-
-      if (std::isfinite(depth_m) && depth_m >= min_depth_m && depth_m <= max_depth_m) {
-        samples.push_back(depth_m);
-      }
-    }
-  }
-
-  if (samples.empty()) {
-    return std::nullopt;
-  }
-
-  std::sort(samples.begin(), samples.end());
-  return samples[samples.size() / 2];
 }
 
 }  // namespace
@@ -320,10 +267,6 @@ OptimizationResult optimizeSession(const SessionData &session, const OptimizerCo
         observations_by_track[observation.track_id].push_back(TrackRef{&keyframe, &observation});
       }
     }
-
-    std::unordered_map<uint64_t, cv::Mat> depth_cache;
-    depth_cache.reserve(session.keyframes.size());
-
     for (const auto &entry : observations_by_track) {
       const uint32_t track_id = entry.first;
       const auto &track_refs = entry.second;
@@ -333,33 +276,23 @@ OptimizationResult optimizeSession(const SessionData &session, const OptimizerCo
 
       std::optional<gtsam::Point3> initial_landmark;
       for (const auto &track_ref : track_refs) {
-        if (track_ref.keyframe->depth_path.empty()) {
+        if (!track_ref.observation->has_right) {
           continue;
         }
 
-        auto depth_it = depth_cache.find(track_ref.keyframe->kf_id);
-        if (depth_it == depth_cache.end()) {
-          cv::Mat depth = cv::imread(track_ref.keyframe->depth_path.string(), cv::IMREAD_UNCHANGED);
-          depth_it = depth_cache.emplace(track_ref.keyframe->kf_id, std::move(depth)).first;
-        }
-        if (depth_it->second.empty()) {
+        const double disparity_px =
+          static_cast<double>(track_ref.observation->u_l) -
+          static_cast<double>(track_ref.observation->u_r);
+        if (!std::isfinite(disparity_px) || disparity_px <= 1e-3) {
           continue;
         }
 
-        const int u = static_cast<int>(std::lround(track_ref.observation->u_l));
-        const int v = static_cast<int>(std::lround(track_ref.observation->v_l));
-        const auto depth_m = sampleDepthMeters(
-          depth_it->second,
-          u,
-          v,
-          config.depth_scale,
-          config.min_depth_m,
-          config.max_depth_m);
-        if (!depth_m.has_value()) {
+        const double z =
+          (session.camera.fx * config.stereo_baseline_m) / disparity_px;
+        if (!std::isfinite(z) || z < config.min_depth_m || z > config.max_depth_m) {
           continue;
         }
 
-        const double z = *depth_m;
         const double x = (static_cast<double>(track_ref.observation->u_l) - session.camera.cx) * z / session.camera.fx;
         const double y = (static_cast<double>(track_ref.observation->v_l) - session.camera.cy) * z / session.camera.fy;
         const gtsam::Point3 point_in_camera(x, y, z);
