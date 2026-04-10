@@ -89,12 +89,14 @@ private:
       declare_parameter<bool>("overwrite_existing_session", false);
     config.body_frame_id = declare_parameter<std::string>("body_frame_id", "body");
 
-    config.rgb_image_topic = declare_parameter<std::string>("rgb_image_topic", "/oak/left/image_rect");
+    config.rgb_image_topic = declare_parameter<std::string>(
+      "rgb_image_topic", "/camera0/realsense_splitter_node/output/infra_1");
     config.rgb_camera_info_topic =
-      declare_parameter<std::string>("rgb_camera_info_topic", "/oak/left/camera_info");
-    config.depth_image_topic = declare_parameter<std::string>("depth_image_topic", "/oak/depth");
+      declare_parameter<std::string>("rgb_camera_info_topic", "/camera0/infra1/camera_info");
+    config.depth_image_topic = declare_parameter<std::string>(
+      "depth_image_topic", "/camera0/realsense_splitter_node/output/depth");
     config.depth_camera_info_topic =
-      declare_parameter<std::string>("depth_camera_info_topic", "/oak/depth/camera_info");
+      declare_parameter<std::string>("depth_camera_info_topic", "/camera0/depth/camera_info");
     config.keyframe_topic = declare_parameter<std::string>("keyframe_topic", "/keyframes");
     config.optimization_result_topic =
       declare_parameter<std::string>("optimization_result_topic", "/optimization_result");
@@ -107,7 +109,7 @@ private:
       declare_parameter<std::vector<std::string>>("tag_frame_names", std::vector<std::string>{});
 
     config.rgb_match_tolerance_ns =
-      msToNs(declare_parameter<double>("rgb_match_tolerance_ms", 20.0));
+      msToNs(declare_parameter<double>("rgb_match_tolerance_ms", 50.0));
     config.depth_match_tolerance_ns =
       msToNs(declare_parameter<double>("depth_match_tolerance_ms", 25.0));
     config.tag_match_tolerance_ns =
@@ -190,6 +192,7 @@ private:
         sensor_qos,
         [this](CameraInfoMsg::ConstSharedPtr msg) {
           writer_->writeCameraInfo(*msg, "rgb_camera_info.yaml");
+          maybeWriteCameraExtrinsics_(*msg, "body_to_rgb_camera.yaml", rgb_extrinsics_written_);
         });
     }
 
@@ -199,6 +202,7 @@ private:
         sensor_qos,
         [this](CameraInfoMsg::ConstSharedPtr msg) {
           writer_->writeCameraInfo(*msg, "depth_camera_info.yaml");
+          maybeWriteCameraExtrinsics_(*msg, "body_to_depth_camera.yaml", depth_extrinsics_written_);
         });
     }
 
@@ -410,6 +414,43 @@ private:
 #endif
   }
 
+  void maybeWriteCameraExtrinsics_(
+    const CameraInfoMsg &msg,
+    const std::string &filename,
+    bool &already_written)
+  {
+    if (already_written || !tf_buffer_) {
+      return;
+    }
+    if (msg.header.frame_id.empty()) {
+      return;
+    }
+
+    try {
+      const auto transform = tf_buffer_->lookupTransform(
+        config_.body_frame_id,
+        msg.header.frame_id,
+        tf2::TimePointZero);
+      writer_->writeBodyToCameraExtrinsics(
+        config_.body_frame_id, msg.header.frame_id, transform, filename);
+      already_written = true;
+      RCLCPP_INFO(
+        get_logger(),
+        "Wrote body->camera extrinsics '%s' for %s <- %s",
+        filename.c_str(),
+        config_.body_frame_id.c_str(),
+        msg.header.frame_id.c_str());
+    } catch (const tf2::TransformException &ex) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Waiting for TF %s <- %s before writing %s: %s",
+        config_.body_frame_id.c_str(),
+        msg.header.frame_id.c_str(),
+        filename.c_str(),
+        ex.what());
+    }
+  }
+
   LoggerConfig config_;
   std::unordered_map<int32_t, std::string> tag_frame_overrides_;
   std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
@@ -427,6 +468,8 @@ private:
   rclcpp::Subscription<TagArrayMsg>::SharedPtr tag_sub_;
 #endif
   rclcpp::TimerBase::SharedPtr maintenance_timer_;
+  bool rgb_extrinsics_written_{false};
+  bool depth_extrinsics_written_{false};
 };
 
 }  // namespace online_mapping_logger

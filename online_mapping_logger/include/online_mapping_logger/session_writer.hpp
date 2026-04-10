@@ -16,6 +16,11 @@ public:
 
   const std::string &sessionDir() const;
   void writeCameraInfo(const CameraInfoMsg &msg, const std::string &filename);
+  void writeBodyToCameraExtrinsics(
+    const std::string &body_frame_id,
+    const std::string &camera_frame_id,
+    const geometry_msgs::msg::TransformStamped &transform,
+    const std::string &filename);
   void writeRecord(const CompletedRecord &record);
 
 private:

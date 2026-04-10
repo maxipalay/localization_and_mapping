@@ -3,17 +3,20 @@
 Standalone ROS 2 logger for online mapping sessions. It records keyframes, RGB/depth images,
 AprilTag detections, TF-resolved body-to-tag observations, and optimizer output for offline use.
 
-For the OAK pipeline used in this workspace, the dense-mapping image pair should be logged from:
+For the current RealSense splitter pipeline in this workspace, the live logger should use:
 
-- `rgb_image_topic: /oak/left/image_synced`
-- `rgb_camera_info_topic: /oak/left/image_synced/camera_info`
-- `depth_image_topic: /oak/depth`
-- `depth_camera_info_topic: /oak/depth/camera_info`
+- `body_frame_id: camera0_imu_frame`
+- `rgb_image_topic: /camera0/realsense_splitter_node/output/infra_1`
+- `rgb_camera_info_topic: /camera0/infra1/camera_info`
+- `depth_image_topic: /camera0/realsense_splitter_node/output/depth`
+- `depth_camera_info_topic: /camera0/depth/camera_info`
 
-For alternating IR capture, the RGB stream is effectively every other frame, so the logger defaults use a wider RGB match tolerance.
+The logger also writes `calibration/body_to_rgb_camera.yaml` and
+`calibration/body_to_depth_camera.yaml` by resolving TF from `body_frame_id` to the camera-info
+frame ids at runtime.
 
-That pair is aligned for dense fusion. `oak/left/image_rect` is not the correct color partner for
-`oak/depth` in this setup.
+This uses the emitter-off left IR image as the mapping image stream and the splitter depth stream
+for depth. That pair is stable for logging, but it is not guaranteed to be pixel-aligned.
 
 ## Build note
 

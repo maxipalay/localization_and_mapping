@@ -141,6 +141,32 @@ void SessionWriter::writeCameraInfo(const CameraInfoMsg &msg, const std::string 
   os << "  do_rectify: " << (msg.roi.do_rectify ? "true" : "false") << "\n";
 }
 
+void SessionWriter::writeBodyToCameraExtrinsics(
+  const std::string &body_frame_id,
+  const std::string &camera_frame_id,
+  const geometry_msgs::msg::TransformStamped &transform,
+  const std::string &filename)
+{
+  const auto path = std::filesystem::path(calibration_dir_) / filename;
+  std::ofstream os(path, std::ios::out | std::ios::trunc);
+  if (!os.is_open()) {
+    throw std::runtime_error("failed to open extrinsics file: " + path.string());
+  }
+
+  os << "body_frame_id: " << yamlDoubleQuoted(body_frame_id) << "\n";
+  os << "camera_frame_id: " << yamlDoubleQuoted(camera_frame_id) << "\n";
+  os << "body_T_camera:\n";
+  os << "  position: ["
+     << transform.transform.translation.x << ", "
+     << transform.transform.translation.y << ", "
+     << transform.transform.translation.z << "]\n";
+  os << "  orientation_xyzw: ["
+     << transform.transform.rotation.x << ", "
+     << transform.transform.rotation.y << ", "
+     << transform.transform.rotation.z << ", "
+     << transform.transform.rotation.w << "]\n";
+}
+
 void SessionWriter::writeRecord(const CompletedRecord &record)
 {
   const auto prefix = formatKfId(record.pending.keyframe.kf_id);
@@ -262,6 +288,8 @@ void SessionWriter::writeSessionMetadata_()
   os << "  tags_dir: \"tags\"\n";
   os << "  keyframes_dir: \"keyframes\"\n";
   os << "  calibration_dir: \"calibration\"\n";
+  os << "  rgb_body_to_camera: \"calibration/body_to_rgb_camera.yaml\"\n";
+  os << "  depth_body_to_camera: \"calibration/body_to_depth_camera.yaml\"\n";
 }
 
 void SessionWriter::copyTagPriorFile_()

@@ -11,8 +11,6 @@ optimized poses.
   (typically `calibration/rgb_camera_info.yaml`)
 - Reads a user-supplied `body -> camera` extrinsic YAML
 - Assumes the logged depth is aligned to the logged mapping image stream
-- For the OAK pipeline here, that aligned pair is `oak/left/image_synced` +
-  `oak/depth`, not `oak/left/image_rect` + `oak/depth`
 - If the logged camera info includes `plumb_bob` or `rational_polynomial`
   distortion coefficients, they are passed through to `nvblox::Camera`
 - Fuses depth and color into an `nvblox` TSDF map
@@ -26,17 +24,17 @@ creates CUDA streams during mapper construction.
 ```bash
 ros2 run offline_dense_map_fusion offline_dense_map_fusion_cli \
   --session-dir /tmp/online_mapping_sessions/session_20260321_135348 \
-  --body-to-camera-extrinsics /home/max/develop/workspaces/myslam/body_to_oak_left_optical.yaml
+  --body-to-camera-extrinsics /tmp/online_mapping_sessions/<session>/calibration/body_to_rgb_camera.yaml
 ```
 
-The session should have been logged with:
+For the current RealSense logger setup in this workspace, the recommended logged pair is:
 
-```yaml
-rgb_image_topic: /oak/left/image_synced
-rgb_camera_info_topic: /oak/left/image_synced/camera_info
-depth_image_topic: /oak/depth
-depth_camera_info_topic: /oak/depth/camera_info
-```
+- `/camera0/realsense_splitter_node/output/infra_1`
+- `/camera0/realsense_splitter_node/output/depth`
+
+That is the current stable logging workaround, but it does not satisfy this tool's single-camera
+alignment assumption. Use it only if you accept the geometry mismatch, or update the fusion path to
+support separate image and depth camera models.
 
 Optional flags:
 
@@ -55,7 +53,7 @@ Optional flags:
 
 ```yaml
 body_frame_id: body
-camera_frame_id: oak_left_optical
+camera_frame_id: camera0_color_optical_frame
 position: [0.0, 0.0, 0.0]
 orientation_xyzw: [0.0, 0.0, 0.0, 1.0]
 ```
@@ -75,7 +73,7 @@ If the mesh is noisy, a good first pass is:
 ```bash
 ros2 run offline_dense_map_fusion offline_dense_map_fusion_cli \
   --session-dir /tmp/online_mapping_sessions/<session> \
-  --body-to-camera-extrinsics /home/max/develop/workspaces/myslam/src/body_to_oak_left_optical.yaml \
+  --body-to-camera-extrinsics /tmp/online_mapping_sessions/<session>/calibration/body_to_rgb_camera.yaml \
   --voxel-size 0.05 \
   --pixel-stride 4 \
   --crop-border-px 10 \
