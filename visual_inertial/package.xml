@@ -30,6 +30,8 @@
   <depend>cv_bridge</depend>
   <depend>image_transport</depend>
   <depend>opencv</depend>
+  <depend>tf2_ros</depend>
+  <exec_depend>realsense_utils</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

@@ -22,6 +22,8 @@
 #include <message_filters/sync_policies/approximate_time.h>
 #include <message_filters/synchronizer.h>
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <cmath>
@@ -91,6 +93,19 @@ static inline builtin_interfaces::msg::Time toStamp(double tsec)
     return s;
 }
 
+static inline Eigen::Isometry3d transformMsgToIso(const geometry_msgs::msg::Transform &t)
+{
+    Eigen::Quaterniond q(t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z);
+    q.normalize();
+    Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+    T.linear() = q.toRotationMatrix();
+    T.translation() = Eigen::Vector3d(
+        t.translation.x,
+        t.translation.y,
+        t.translation.z);
+    return T;
+}
+
 class FeatureNode : public rclcpp::Node
 {
 public:
@@ -100,6 +115,7 @@ public:
         // Params
         input_topic_left_ = declare_parameter<std::string>("input_topic_left", "/oak/left/image_rect");
         input_topic_right_ = declare_parameter<std::string>("input_topic_right", "/oak/right/image_rect");
+        input_topic_imu_ = declare_parameter<std::string>("input_topic_imu", "/oak/imu");
         left_info_t = declare_parameter<std::string>("left/camera_info", "/oak/left/camera_info");
         right_info_t = declare_parameter<std::string>("right/camera_info", "/oak/right/camera_info");
         tracks_topic_ = declare_parameter<std::string>("tracks_topic", "/tracks");
@@ -119,7 +135,10 @@ public:
 
         // (optional) let users override frame ids
         parent_frame_ = this->declare_parameter<std::string>("parent_frame_id", "odom");
-        child_frame_ = this->declare_parameter<std::string>("child_frame_id", "body");
+        published_child_frame_ = this->declare_parameter<std::string>("child_frame_id", "body");
+        body_frame_ = this->declare_parameter<std::string>("body_frame_id", published_child_frame_);
+        auto_resolve_t_bc_from_tf_ =
+            this->declare_parameter<bool>("auto_resolve_t_bc_from_tf", true);
 
         // Build VisualInertial params from ROS parameters
         VisualInertial::Params vi_params;
@@ -215,6 +234,8 @@ public:
         }
 
         visual_inertial_ = std::make_unique<VisualInertial>(vi_params);
+        tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
         // Subscribe with transport string + QoS (Humble API)
         sub_left_.subscribe(this, input_topic_left_, transport_, rmw_qos_profile_sensor_data);
@@ -253,8 +274,8 @@ public:
                                           std::placeholders::_1, std::placeholders::_2));
 
         RCLCPP_INFO(get_logger(),
-                    "Stereo: L='%s' R='%s' transport='%s' image-sync: queue=%d slop=%.3fms age_penalty=%.3f",
-                    input_topic_left_.c_str(), input_topic_right_.c_str(), transport_.c_str(),
+                    "Stereo: L='%s' R='%s' IMU='%s' transport='%s' image-sync: queue=%d slop=%.3fms age_penalty=%.3f",
+                    input_topic_left_.c_str(), input_topic_right_.c_str(), input_topic_imu_.c_str(), transport_.c_str(),
                     queue, stereo_slop_s * 1e3, age_penalty);
 
         auto qos = rclcpp::QoS(rclcpp::KeepLast(10))
@@ -264,7 +285,7 @@ public:
         kf_pub_ = this->create_publisher<visual_inertial::msg::Keyframe>("keyframes", qos);
 
         imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
-            "/oak/imu",
+            input_topic_imu_,
             rclcpp::SensorDataQoS(),
             std::bind(&FeatureNode::imuCallback_, this, std::placeholders::_1));
 
@@ -298,6 +319,7 @@ private:
     rclcpp::Publisher<visual_inertial::msg::Tracks>::SharedPtr tracks_pub_;
 
     std::string input_topic_left_, input_topic_right_, transport_;
+    std::string input_topic_imu_;
     std::string left_info_t, right_info_t;
     std::string tracks_topic_;
 
@@ -314,8 +336,18 @@ private:
     std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
 
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
     std::string parent_frame_;
-    std::string child_frame_;
+    std::string published_child_frame_;
+    std::string body_frame_;
+    bool auto_resolve_t_bc_from_tf_{true};
+    bool t_bc_resolved_from_tf_{false};
+    bool imu_rotation_resolved_{false};
+    std::string imu_measurement_frame_;
+    Eigen::Matrix3d R_body_imu_measurement_ = Eigen::Matrix3d::Identity();
+    bool publish_child_offset_resolved_{false};
+    Eigen::Isometry3d T_B_P_ = Eigen::Isometry3d::Identity();
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
 
@@ -367,6 +399,15 @@ private:
             RCLCPP_WARN_THROTTLE(
                 get_logger(), *get_clock(), 2000,
                 "Waiting for left/right CameraInfo before processing stereo pairs");
+            return;
+        }
+
+        if (!maybeResolveBodyCameraExtrinsic_(left_info->header.frame_id))
+        {
+            return;
+        }
+        if (!maybeResolvePublishedChildOffset_())
+        {
             return;
         }
 
@@ -439,10 +480,10 @@ private:
         geometry_msgs::msg::TransformStamped tf_msg;
         tf_msg.header.stamp = left_msg->header.stamp;
         tf_msg.header.frame_id = parent_frame_;
-        tf_msg.child_frame_id = child_frame_;
-        const auto &T = result.vo_pose_abs;
-        Eigen::Vector3d t = T.translation();
-        Eigen::Quaterniond q(T.rotation());
+        tf_msg.child_frame_id = published_child_frame_;
+        const Eigen::Isometry3d T_pub = result.vo_pose_abs * T_B_P_;
+        Eigen::Vector3d t = T_pub.translation();
+        Eigen::Quaterniond q(T_pub.rotation());
         tf_msg.transform.translation.x = t.x();
         tf_msg.transform.translation.y = t.y();
         tf_msg.transform.translation.z = t.z();
@@ -612,15 +653,23 @@ private:
     void imuCallback_(const sensor_msgs::msg::Imu::SharedPtr msg)
     {
         const double t_imu = rclcpp::Time(msg->header.stamp).seconds();
+        if (!maybeResolveImuRotation_(msg->header.frame_id))
+        {
+            return;
+        }
 
         ImuSample s;
         s.t_s = t_imu;
-        s.accel = Eigen::Vector3d(msg->linear_acceleration.x,
-                                  msg->linear_acceleration.y,
-                                  msg->linear_acceleration.z);
-        s.gyro = Eigen::Vector3d(msg->angular_velocity.x,
-                                 msg->angular_velocity.y,
-                                 msg->angular_velocity.z);
+        const Eigen::Vector3d accel_meas(
+            msg->linear_acceleration.x,
+            msg->linear_acceleration.y,
+            msg->linear_acceleration.z);
+        const Eigen::Vector3d gyro_meas(
+            msg->angular_velocity.x,
+            msg->angular_velocity.y,
+            msg->angular_velocity.z);
+        s.accel = R_body_imu_measurement_ * accel_meas;
+        s.gyro = R_body_imu_measurement_ * gyro_meas;
 
         visual_inertial_->processImu(s);
 
@@ -651,6 +700,130 @@ private:
                 t_imu_raw, t_img, dt);
         }
         // debug stats - end
+    }
+
+    bool maybeResolveBodyCameraExtrinsic_(const std::string &camera_frame)
+    {
+        if (!auto_resolve_t_bc_from_tf_ || t_bc_resolved_from_tf_)
+        {
+            return true;
+        }
+        if (camera_frame.empty())
+        {
+            return false;
+        }
+        try
+        {
+            const auto tf = tf_buffer_->lookupTransform(
+                body_frame_, camera_frame, tf2::TimePointZero);
+            const Eigen::Isometry3d T_BC = transformMsgToIso(tf.transform);
+            visual_inertial_->setBodyCameraExtrinsic(T_BC);
+            t_bc_resolved_from_tf_ = true;
+
+            Eigen::Quaterniond q(T_BC.rotation());
+            q.normalize();
+            RCLCPP_INFO(
+                get_logger(),
+                "Resolved T_BC from TF: %s <- %s, t=[%.6f %.6f %.6f], q_xyzw=[%.6f %.6f %.6f %.6f]",
+                body_frame_.c_str(), camera_frame.c_str(),
+                T_BC.translation().x(), T_BC.translation().y(), T_BC.translation().z(),
+                q.x(), q.y(), q.z(), q.w());
+            return true;
+        }
+        catch (const tf2::TransformException &ex)
+        {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Waiting for TF %s <- %s to resolve T_BC: %s",
+                body_frame_.c_str(), camera_frame.c_str(), ex.what());
+            return false;
+        }
+    }
+
+    bool maybeResolveImuRotation_(const std::string &imu_frame)
+    {
+        if (imu_frame.empty())
+        {
+            return false;
+        }
+        if (imu_rotation_resolved_ && imu_measurement_frame_ == imu_frame)
+        {
+            return true;
+        }
+        if (imu_frame == body_frame_)
+        {
+            imu_measurement_frame_ = imu_frame;
+            R_body_imu_measurement_.setIdentity();
+            imu_rotation_resolved_ = true;
+            return true;
+        }
+
+        try
+        {
+            const auto tf = tf_buffer_->lookupTransform(
+                body_frame_, imu_frame, tf2::TimePointZero);
+            const Eigen::Isometry3d T_BI = transformMsgToIso(tf.transform);
+            imu_measurement_frame_ = imu_frame;
+            R_body_imu_measurement_ = T_BI.rotation();
+            imu_rotation_resolved_ = true;
+
+            Eigen::Quaterniond q(R_body_imu_measurement_);
+            q.normalize();
+            RCLCPP_INFO(
+                get_logger(),
+                "Resolved IMU rotation from TF: %s <- %s, q_xyzw=[%.6f %.6f %.6f %.6f]",
+                body_frame_.c_str(), imu_frame.c_str(),
+                q.x(), q.y(), q.z(), q.w());
+            return true;
+        }
+        catch (const tf2::TransformException &ex)
+        {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Waiting for TF %s <- %s to rotate IMU samples: %s",
+                body_frame_.c_str(), imu_frame.c_str(), ex.what());
+            return false;
+        }
+    }
+
+    bool maybeResolvePublishedChildOffset_()
+    {
+        if (publish_child_offset_resolved_)
+        {
+            return true;
+        }
+        if (published_child_frame_ == body_frame_)
+        {
+            T_B_P_.setIdentity();
+            publish_child_offset_resolved_ = true;
+            return true;
+        }
+
+        try
+        {
+            const auto tf = tf_buffer_->lookupTransform(
+                body_frame_, published_child_frame_, tf2::TimePointZero);
+            T_B_P_ = transformMsgToIso(tf.transform);
+            publish_child_offset_resolved_ = true;
+
+            Eigen::Quaterniond q(T_B_P_.rotation());
+            q.normalize();
+            RCLCPP_INFO(
+                get_logger(),
+                "Resolved published child offset from TF: %s <- %s, t=[%.6f %.6f %.6f], q_xyzw=[%.6f %.6f %.6f %.6f]",
+                body_frame_.c_str(), published_child_frame_.c_str(),
+                T_B_P_.translation().x(), T_B_P_.translation().y(), T_B_P_.translation().z(),
+                q.x(), q.y(), q.z(), q.w());
+            return true;
+        }
+        catch (const tf2::TransformException &ex)
+        {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Waiting for TF %s <- %s to publish odom child frame: %s",
+                body_frame_.c_str(), published_child_frame_.c_str(), ex.what());
+            return false;
+        }
     }
 
     void logStereoCalibration_(

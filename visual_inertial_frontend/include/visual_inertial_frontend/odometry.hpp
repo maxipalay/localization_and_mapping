@@ -83,6 +83,11 @@ public:
         calibration_ = calibration;
     }
 
+    void setBodyCameraExtrinsic(const Eigen::Isometry3d &T_BC)
+    {
+        params_.T_BC = T_BC;
+    }
+
     // Thread-safe IMU helpers for the node's KF-finalizer worker thread.
     // These MUST NOT touch any VO state; they only forward to imu_preint_ (which has its own mutex).
     bool hasImuCoverage(double t_s) const

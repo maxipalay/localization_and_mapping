@@ -3,6 +3,8 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 
 #include <visual_inertial/msg/keyframe.hpp>
 #include <visual_inertial/msg/optimization_result.hpp>
@@ -87,6 +89,19 @@ namespace
         pose.orientation.z = q.z();
 
         return pose;
+    }
+
+    static Eigen::Isometry3d transformMsgToIso(const geometry_msgs::msg::Transform &t)
+    {
+        Eigen::Quaterniond q(t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z);
+        q.normalize();
+        Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+        T.linear() = q.toRotationMatrix();
+        T.translation() = Eigen::Vector3d(
+            t.translation.x,
+            t.translation.y,
+            t.translation.z);
+        return T;
     }
 
     static KeyframeEvent toKeyframeEvent(const visual_inertial::msg::Keyframe &msg)
@@ -182,6 +197,9 @@ public:
 
         map_frame_id_ = declare_parameter<std::string>("map_frame_id", "map");
         odom_frame_id_ = declare_parameter<std::string>("odom_frame_id", "odom");
+        body_frame_id_ = declare_parameter<std::string>("body_frame_id", "body");
+        auto_resolve_t_bc_from_tf_ =
+            declare_parameter<bool>("auto_resolve_t_bc_from_tf", true);
 
         // Broadcast rate for map->odom
         tf_pub_rate_hz_ = declare_parameter<double>("tf_pub_rate_hz", 30.0);
@@ -242,6 +260,8 @@ public:
 
         // -------- TF broadcaster --------
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+        tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
         // -------- TF timer (constant-rate rebroadcast of latest T_map_odom) --------
         using namespace std::chrono_literals;
@@ -427,6 +447,9 @@ private:
         if (!left_info_.has_value() || !right_info_.has_value())
             return;
 
+        if (!maybeResolveBodyCameraExtrinsic_())
+            return;
+
         const auto rig = makeStereoModel(*left_info_, *right_info_);
         if (!rig.valid())
         {
@@ -445,6 +468,50 @@ private:
         RCLCPP_INFO(get_logger(),
                     "Stereo rig ready: fx=%.3f fy=%.3f cx=%.3f cy=%.3f baseline=%.5f (m). Optimizer initialized.",
                     rig.left.fx(), rig.left.fy(), rig.left.cx(), rig.left.cy(), rig.baseline);
+    }
+
+    bool maybeResolveBodyCameraExtrinsic_()
+    {
+        if (!auto_resolve_t_bc_from_tf_ || t_bc_resolved_from_tf_)
+        {
+            return true;
+        }
+        if (!left_info_.has_value())
+        {
+            return false;
+        }
+
+        const std::string &camera_frame = left_info_->header.frame_id;
+        if (camera_frame.empty())
+        {
+            return false;
+        }
+
+        try
+        {
+            const auto tf = tf_buffer_->lookupTransform(
+                body_frame_id_, camera_frame, tf2::TimePointZero);
+            cfg_.T_BC = transformMsgToIso(tf.transform);
+            t_bc_resolved_from_tf_ = true;
+
+            Eigen::Quaterniond q(cfg_.T_BC.rotation());
+            q.normalize();
+            RCLCPP_INFO(
+                get_logger(),
+                "Resolved T_BC from TF: %s <- %s, t=[%.6f %.6f %.6f], q_xyzw=[%.6f %.6f %.6f %.6f]",
+                body_frame_id_.c_str(), camera_frame.c_str(),
+                cfg_.T_BC.translation().x(), cfg_.T_BC.translation().y(), cfg_.T_BC.translation().z(),
+                q.x(), q.y(), q.z(), q.w());
+            return true;
+        }
+        catch (const tf2::TransformException &ex)
+        {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Waiting for TF %s <- %s to resolve T_BC: %s",
+                body_frame_id_.c_str(), camera_frame.c_str(), ex.what());
+            return false;
+        }
     }
 
     void workerLoop_()
@@ -685,6 +752,7 @@ private:
     std::string keyframe_topic_;
     std::string left_info_topic_;
     std::string right_info_topic_;
+    std::string body_frame_id_;
     std::string map_frame_id_;
     std::string odom_frame_id_;
 
@@ -698,6 +766,10 @@ private:
 
     // TF
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+    bool auto_resolve_t_bc_from_tf_{true};
+    bool t_bc_resolved_from_tf_{false};
 
     // Latest map->odom cached transform
     std::mutex tf_mtx_;
