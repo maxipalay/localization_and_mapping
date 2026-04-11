@@ -5,17 +5,15 @@ serial_no: ''
 usb_port_id: ''
 
 rgb_camera:
-  color_profile: '640x480x15'
-  profile: '640x480x15'
+  color_profile: '640x360x15'
 color_info_qos: "SENSOR_DATA"
 color_qos: "SENSOR_DATA"
 
 depth_module:
   depth_profile: '640x360x60'
   infra_profile: '640x360x60'
-  profile: '640x360x60'
   emitter_enabled: 1
-  emitter_on_off: true
+  emitter_on_off: false
 depth_qos: "SENSOR_DATA"
 depth_info_qos: "SENSOR_DATA"
 
@@ -30,9 +28,8 @@ enable_infra2: true
 
 pointcloud:
   enable: false
-
-pointcloud_texture_index: 0
-pointcloud_texture_stream: RS2_STREAM_ANY
+  stream_index_filter: 0
+  stream_filter: 0
 
 enable_sync: false
 align_depth.enable: false

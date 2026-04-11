@@ -1,10 +1,13 @@
+import os
+
+import yaml
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, TimerAction
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes
 from launch_ros.descriptions import ComposableNode
-from launch_ros.substitutions import FindPackageShare
 
 
 def _default_run_splitter_list(num_cameras: int):
@@ -14,8 +17,16 @@ def _default_run_splitter_list(num_cameras: int):
     return run_splitter_list
 
 
-def _camera_node(camera_name: str, config_file_path, intra_process_comms, serial_number=None):
-    parameters = [config_file_path, {'camera_name': camera_name}]
+def _load_camera_config(config_file_path: str):
+    with open(config_file_path, 'r', encoding='utf-8') as config_file:
+        config = yaml.safe_load(config_file) or {}
+    if not isinstance(config, dict):
+        raise RuntimeError(f'RealSense config must be a YAML mapping: {config_file_path}')
+    return config
+
+
+def _camera_node(camera_name: str, config_params, intra_process_comms, serial_number=None):
+    parameters = [config_params, {'camera_name': camera_name}]
     if serial_number:
         parameters.append({'serial_no': str(serial_number)})
     return ComposableNode(
@@ -52,6 +63,37 @@ def _splitter_node(camera_name: str, intra_process_comms):
     )
 
 
+def _delayed_param_set_action(camera_name: str, param_name: str, value: str, period: float):
+    # RealSense dynamic sensor params are declared after the device finishes starting.
+    # Wait for the param to exist; if this camera never exposes it, skip quietly.
+    script = (
+        'deadline=$((SECONDS + 20)); '
+        'while ! ros2 param describe "$1" "$2" >/dev/null 2>&1; do '
+        '  if [ "$SECONDS" -ge "$deadline" ]; then '
+        '    echo "Skipping emitter retoggle for $1: $2 was not declared"; '
+        '    exit 0; '
+        '  fi; '
+        '  sleep 0.5; '
+        'done; '
+        'ros2 param set "$1" "$2" "$3"'
+    )
+    return TimerAction(
+        period=period,
+        actions=[ExecuteProcess(
+            cmd=[
+                'bash',
+                '-lc',
+                script,
+                '--',
+                f'/{camera_name}',
+                param_name,
+                value,
+            ],
+            output='screen',
+        )],
+    )
+
+
 def _add_cameras(context):
     container_name = LaunchConfiguration('container_name').perform(context)
     camera_serial_numbers_arg = LaunchConfiguration('camera_serial_numbers').perform(context)
@@ -64,18 +106,13 @@ def _add_cameras(context):
     emitter_retoggle_delay_sec = float(
         LaunchConfiguration('emitter_retoggle_delay_sec').perform(context)
     )
-    flashing_config = PathJoinSubstitution([
-        FindPackageShare('realsense_utils'),
-        'config',
-        'sensors',
-        'realsense_emitter_flashing.yaml',
-    ])
-    emitter_on_config = PathJoinSubstitution([
-        FindPackageShare('realsense_utils'),
-        'config',
-        'sensors',
-        'realsense_emitter_on.yaml',
-    ])
+    package_share_dir = get_package_share_directory('realsense_utils')
+    flashing_config = _load_camera_config(
+        os.path.join(package_share_dir, 'config', 'sensors', 'realsense_emitter_flashing.yaml')
+    )
+    emitter_on_config = _load_camera_config(
+        os.path.join(package_share_dir, 'config', 'sensors', 'realsense_emitter_on.yaml')
+    )
 
     if camera_serial_numbers_arg == '':
         camera_serial_numbers = [None]
@@ -94,12 +131,12 @@ def _add_cameras(context):
         camera_name = f'camera{idx}'
         serial_number = camera_serial_numbers[idx]
         run_splitter = run_splitter_list[idx]
-        config_file_path = flashing_config if run_splitter else emitter_on_config
+        config_params = flashing_config if run_splitter else emitter_on_config
 
         nodes = [
             _camera_node(
                 camera_name=camera_name,
-                config_file_path=config_file_path,
+                config_params=config_params,
                 intra_process_comms=intra_process_comms,
                 serial_number=serial_number,
             )
@@ -118,27 +155,43 @@ def _add_cameras(context):
         )
         if run_splitter and auto_retoggle_emitter:
             actions.append(
-                TimerAction(
+                _delayed_param_set_action(
+                    camera_name=camera_name,
+                    param_name='depth_module.emitter_on_off',
+                    value='false',
                     period=idx * 10.0 + emitter_retoggle_delay_sec,
-                    actions=[ExecuteProcess(
-                        cmd=[
-                            'ros2', 'param', 'set', f'/{camera_name}',
-                            'depth_module.emitter_on_off', 'false',
-                        ],
-                        output='screen',
-                    )],
                 )
             )
             actions.append(
-                TimerAction(
+                _delayed_param_set_action(
+                    camera_name=camera_name,
+                    param_name='depth_module.enable_auto_exposure',
+                    value='false',
                     period=idx * 10.0 + emitter_retoggle_delay_sec + 1.0,
-                    actions=[ExecuteProcess(
-                        cmd=[
-                            'ros2', 'param', 'set', f'/{camera_name}',
-                            'depth_module.emitter_on_off', 'true',
-                        ],
-                        output='screen',
-                    )],
+                )
+            )
+            actions.append(
+                _delayed_param_set_action(
+                    camera_name=camera_name,
+                    param_name='depth_module.exposure',
+                    value='12000',
+                    period=idx * 10.0 + emitter_retoggle_delay_sec + 2.0,
+                )
+            )
+            actions.append(
+                _delayed_param_set_action(
+                    camera_name=camera_name,
+                    param_name='depth_module.gain',
+                    value='100',
+                    period=idx * 10.0 + emitter_retoggle_delay_sec + 3.0,
+                )
+            )
+            actions.append(
+                _delayed_param_set_action(
+                    camera_name=camera_name,
+                    param_name='depth_module.emitter_on_off',
+                    value='true',
+                    period=idx * 10.0 + emitter_retoggle_delay_sec + 4.0,
                 )
             )
     return actions
@@ -154,7 +207,7 @@ def generate_launch_description():
         DeclareLaunchArgument('camera_serial_numbers', default_value=''),
         DeclareLaunchArgument('num_cameras', default_value='1'),
         DeclareLaunchArgument('intra_process_comms', default_value='True'),
-        DeclareLaunchArgument('auto_retoggle_emitter_on_off', default_value='True'),
+        DeclareLaunchArgument('auto_retoggle_emitter_on_off', default_value='False'),
         DeclareLaunchArgument('emitter_retoggle_delay_sec', default_value='5.0'),
         ComposableNodeContainer(
             name=container_name,
