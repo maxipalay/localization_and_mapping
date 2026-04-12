@@ -25,7 +25,7 @@ visual_inertial:
     age_penalty: 0.0
 
     # VisualInertial core
-    target_features: 350
+    target_features: 450
     stereo_epi_eps_y: 1.5
     stereo_disp_min: 3.0
     stereo_disp_max: 255.0
@@ -38,7 +38,7 @@ visual_inertial:
     # Track top-up / spatial distribution
     mask_scale: 20
     topup_grid_scale: 24
-    max_total_tracks: 300
+    max_total_tracks: 400
     topup_burst_factor: 2.0
     topup_detect_factor: 3.0
 
@@ -97,8 +97,8 @@ visual_inertial_optimization:
     bias_gyro_prior_sigma: 0.1
 
     use_vo_between: true
-    between_rot_sigma_rad: 0.1
-    between_trans_sigma_m: 0.1
+    between_rot_sigma_rad: 0.3
+    between_trans_sigma_m: 0.3
     between_huber_k: 1.345
     use_imu: true
 
