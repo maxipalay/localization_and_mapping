@@ -5,6 +5,7 @@
 #include <message_filters/sync_policies/exact_time.h>
 
 #include <memory>
+#include <string>
 
 #include <rclcpp/rclcpp.hpp>
 #include <realsense2_camera_msgs/msg/metadata.hpp>

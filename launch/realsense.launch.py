@@ -39,7 +39,23 @@ def _camera_node(camera_name: str, config_params, intra_process_comms, serial_nu
     )
 
 
-def _splitter_node(camera_name: str, intra_process_comms):
+def _splitter_node(camera_name: str, intra_process_comms, enable_infra_gain_correction):
+    remappings = [
+        ('input/infra_1', f'/{camera_name}/infra1/image_rect_raw'),
+        ('input/infra_1_metadata', f'/{camera_name}/infra1/metadata'),
+        ('input/infra_2', f'/{camera_name}/infra2/image_rect_raw'),
+        ('input/infra_2_metadata', f'/{camera_name}/infra2/metadata'),
+        ('input/depth', f'/{camera_name}/depth/image_rect_raw'),
+        ('input/depth_metadata', f'/{camera_name}/depth/metadata'),
+        ('input/pointcloud', f'/{camera_name}/depth/color/points'),
+        ('input/pointcloud_metadata', f'/{camera_name}/depth/metadata'),
+    ]
+    if enable_infra_gain_correction:
+        remappings.extend([
+            ('~/output/infra_1', f'/{camera_name}/realsense_splitter_node/raw/infra_1'),
+            ('~/output/infra_2', f'/{camera_name}/realsense_splitter_node/raw/infra_2'),
+        ])
+
     return ComposableNode(
         namespace=camera_name,
         name='realsense_splitter_node',
@@ -49,15 +65,34 @@ def _splitter_node(camera_name: str, intra_process_comms):
             'input_qos': 'SENSOR_DATA',
             'output_qos': 'SENSOR_DATA',
         }],
+        remappings=remappings,
+        extra_arguments=[{'use_intra_process_comms': intra_process_comms}],
+    )
+
+
+def _infra_gain_correction_node(
+    camera_name: str,
+    node_name: str,
+    intra_process_comms,
+    input_topic: str,
+    output_topic: str,
+    infra_gain_map_path,
+    resize_gain_map_to_image,
+):
+    return ComposableNode(
+        namespace=camera_name,
+        name=node_name,
+        package='realsense_utils',
+        plugin='realsense_utils::InfraGainCorrectionNode',
+        parameters=[{
+            'input_qos': 'SENSOR_DATA',
+            'output_qos': 'SENSOR_DATA',
+            'gain_map_path': infra_gain_map_path,
+            'resize_gain_map_to_image': resize_gain_map_to_image,
+        }],
         remappings=[
-            ('input/infra_1', f'/{camera_name}/infra1/image_rect_raw'),
-            ('input/infra_1_metadata', f'/{camera_name}/infra1/metadata'),
-            ('input/infra_2', f'/{camera_name}/infra2/image_rect_raw'),
-            ('input/infra_2_metadata', f'/{camera_name}/infra2/metadata'),
-            ('input/depth', f'/{camera_name}/depth/image_rect_raw'),
-            ('input/depth_metadata', f'/{camera_name}/depth/metadata'),
-            ('input/pointcloud', f'/{camera_name}/depth/color/points'),
-            ('input/pointcloud_metadata', f'/{camera_name}/depth/metadata'),
+            ('input/image', input_topic),
+            ('~/output/image', output_topic),
         ],
         extra_arguments=[{'use_intra_process_comms': intra_process_comms}],
     )
@@ -98,6 +133,11 @@ def _add_cameras(context):
     container_name = LaunchConfiguration('container_name').perform(context)
     camera_serial_numbers_arg = LaunchConfiguration('camera_serial_numbers').perform(context)
     intra_process_comms = LaunchConfiguration('intra_process_comms')
+    enable_infra_gain_correction = (
+        LaunchConfiguration('enable_infra_gain_correction').perform(context).lower() == 'true'
+    )
+    infra_gain_map_path = LaunchConfiguration('infra_gain_map_path')
+    resize_gain_map_to_image = LaunchConfiguration('resize_gain_map_to_image')
     num_cameras = int(LaunchConfiguration('num_cameras').perform(context))
     run_standalone = LaunchConfiguration('run_standalone').perform(context).lower() == 'true'
     auto_retoggle_emitter = (
@@ -142,7 +182,28 @@ def _add_cameras(context):
             )
         ]
         if run_splitter:
-            nodes.append(_splitter_node(camera_name, intra_process_comms))
+            nodes.append(_splitter_node(camera_name, intra_process_comms, enable_infra_gain_correction))
+            if enable_infra_gain_correction:
+                nodes.extend([
+                    _infra_gain_correction_node(
+                        camera_name=camera_name,
+                        node_name='infra_1_gain_correction_node',
+                        intra_process_comms=intra_process_comms,
+                        input_topic=f'/{camera_name}/realsense_splitter_node/raw/infra_1',
+                        output_topic=f'/{camera_name}/realsense_splitter_node/output/infra_1',
+                        infra_gain_map_path=infra_gain_map_path,
+                        resize_gain_map_to_image=resize_gain_map_to_image,
+                    ),
+                    _infra_gain_correction_node(
+                        camera_name=camera_name,
+                        node_name='infra_2_gain_correction_node',
+                        intra_process_comms=intra_process_comms,
+                        input_topic=f'/{camera_name}/realsense_splitter_node/raw/infra_2',
+                        output_topic=f'/{camera_name}/realsense_splitter_node/output/infra_2',
+                        infra_gain_map_path=infra_gain_map_path,
+                        resize_gain_map_to_image=resize_gain_map_to_image,
+                    ),
+                ])
 
         actions.append(
             TimerAction(
@@ -182,7 +243,7 @@ def _add_cameras(context):
                 _delayed_param_set_action(
                     camera_name=camera_name,
                     param_name='depth_module.gain',
-                    value='100',
+                    value='60',
                     period=idx * 10.0 + emitter_retoggle_delay_sec + 3.0,
                 )
             )
@@ -209,6 +270,12 @@ def generate_launch_description():
         DeclareLaunchArgument('intra_process_comms', default_value='True'),
         DeclareLaunchArgument('auto_retoggle_emitter_on_off', default_value='False'),
         DeclareLaunchArgument('emitter_retoggle_delay_sec', default_value='5.0'),
+        DeclareLaunchArgument('enable_infra_gain_correction', default_value='True'),
+        DeclareLaunchArgument(
+            'infra_gain_map_path',
+            default_value='/tmp/radial_vignette_map_20260411_201754.npy',
+        ),
+        DeclareLaunchArgument('resize_gain_map_to_image', default_value='True'),
         ComposableNodeContainer(
             name=container_name,
             namespace='',
