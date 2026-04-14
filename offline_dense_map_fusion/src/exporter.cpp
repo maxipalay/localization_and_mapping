@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 
 namespace offline_dense_map_fusion
@@ -105,6 +106,11 @@ void writeFusionOutputs(
   summary << "depth_scale: " << config.depth_scale << "\n";
   summary << "min_depth_m: " << config.min_depth_m << "\n";
   summary << "max_depth_m: " << config.max_depth_m << "\n";
+  if (std::isfinite(config.max_world_z_m)) {
+    summary << "max_world_z_m: " << config.max_world_z_m << "\n";
+  } else {
+    summary << "max_world_z_m: .inf\n";
+  }
   summary << "pixel_stride: " << config.pixel_stride << "\n";
   summary << "crop_border_px: " << config.crop_border_px << "\n";
   summary << "truncation_distance_vox: " << config.truncation_distance_vox << "\n";

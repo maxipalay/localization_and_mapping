@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -61,6 +62,7 @@ struct FusionConfig
   double depth_scale{0.001};
   double min_depth_m{0.2};
   double max_depth_m{5.0};
+  double max_world_z_m{std::numeric_limits<double>::infinity()};
   int pixel_stride{2};
   int crop_border_px{0};
   double truncation_distance_vox{4.0};

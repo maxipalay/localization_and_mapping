@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -29,6 +30,11 @@ Pose compose(const Pose &lhs, const Pose &rhs)
   out.rotation = lhs.rotation * rhs.rotation;
   out.translation = lhs.rotation * rhs.translation + lhs.translation;
   return out;
+}
+
+cv::Vec3d transformPoint(const Pose &pose, const cv::Vec3d &point)
+{
+  return pose.rotation * point + pose.translation;
 }
 
 double depthMetersAt(const cv::Mat &depth, int y, int x, double depth_scale)
@@ -148,6 +154,9 @@ FusionResult fuseSession(
   if (config.mesh_min_weight < 0.0) {
     throw std::runtime_error("mesh_min_weight must be non-negative");
   }
+  if (!std::isfinite(config.max_world_z_m) && !std::isinf(config.max_world_z_m)) {
+    throw std::runtime_error("max_world_z_m must be finite or +inf");
+  }
 
   FusionResult result;
 
@@ -229,8 +238,20 @@ FusionResult fuseSession(
 
         const double depth_m = depthMetersAt(depth, src_y, src_x, config.depth_scale);
         if (std::isfinite(depth_m) && depth_m >= config.min_depth_m && depth_m <= config.max_depth_m) {
-          depth_buffer[linear_idx] = static_cast<float>(depth_m);
-          ++result.raw_points_considered;
+          bool keep_point = true;
+          if (std::isfinite(config.max_world_z_m)) {
+            const double point_x =
+              (static_cast<double>(src_x) - session.camera.cx) * depth_m / session.camera.fx;
+            const double point_y =
+              (static_cast<double>(src_y) - session.camera.cy) * depth_m / session.camera.fy;
+            const cv::Vec3d point_in_camera(point_x, point_y, depth_m);
+            const cv::Vec3d point_in_world = transformPoint(world_T_camera, point_in_camera);
+            keep_point = point_in_world[2] <= config.max_world_z_m;
+          }
+          if (keep_point) {
+            depth_buffer[linear_idx] = static_cast<float>(depth_m);
+            ++result.raw_points_considered;
+          }
         }
 
         const cv::Vec3b bgr = colorAt(rgb, src_y, src_x);

@@ -43,6 +43,7 @@ Optional flags:
 - `--depth-scale FLOAT`
 - `--min-depth FLOAT`
 - `--max-depth FLOAT`
+- `--max-world-z FLOAT`
 - `--pixel-stride INT`
 - `--crop-border-px INT`
 - `--truncation-distance-vox FLOAT`
@@ -79,7 +80,11 @@ ros2 run offline_dense_map_fusion offline_dense_map_fusion_cli \
   --crop-border-px 10 \
   --min-depth 0.3 \
   --max-depth 3.0 \
+  --max-world-z 2.2 \
   --truncation-distance-vox 6.0 \
   --max-weight 10.0 \
   --mesh-min-weight 0.5
 ```
+
+`--max-world-z` drops any depth sample whose back-projected 3D point lands above that
+world-frame `z` height before TSDF integration. This is a simple way to suppress ceilings.
