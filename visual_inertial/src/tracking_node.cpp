@@ -618,6 +618,19 @@ private:
         msg.between_pose_prev_curr.orientation.y = q_between.y();
         msg.between_pose_prev_curr.orientation.z = q_between.z();
 
+        msg.interval_health.num_frames = ev.interval_health.num_frames;
+        msg.interval_health.num_pose_valid_frames = ev.interval_health.num_pose_valid_frames;
+        msg.interval_health.num_degraded_frames = ev.interval_health.num_degraded_frames;
+        msg.interval_health.num_lost_frames = ev.interval_health.num_lost_frames;
+        msg.interval_health.min_tracks = ev.interval_health.min_tracks;
+        msg.interval_health.mean_tracks = ev.interval_health.mean_tracks;
+        msg.interval_health.min_track_retention = ev.interval_health.min_track_retention;
+        msg.interval_health.mean_track_retention = ev.interval_health.mean_track_retention;
+        msg.interval_health.mean_pnp_inlier_ratio = ev.interval_health.mean_pnp_inlier_ratio;
+        msg.interval_health.max_pnp_reproj_rmse_px = ev.interval_health.max_pnp_reproj_rmse_px;
+        msg.interval_health.min_track_coverage = ev.interval_health.min_track_coverage;
+        msg.interval_health.mean_track_coverage = ev.interval_health.mean_track_coverage;
+
         const auto N = ev.ids.size();
         msg.track_ids.resize(N);
         msg.u_l.resize(N);

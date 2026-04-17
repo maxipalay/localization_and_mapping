@@ -18,6 +18,8 @@ geometry_msgs/Pose pose_odom_body
 geometry_msgs/Pose between_pose_prev_curr
 uint8 has_vo_between
 
+FrontendIntervalHealth interval_health
+
 # Track observations (aligned arrays)
 uint32[] track_ids
 

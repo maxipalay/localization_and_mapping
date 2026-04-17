@@ -118,6 +118,18 @@ namespace
         {
             ev.T_Bkm1_Bk = poseMsgToIso(msg.between_pose_prev_curr);
         }
+        ev.interval_health.num_frames = msg.interval_health.num_frames;
+        ev.interval_health.num_pose_valid_frames = msg.interval_health.num_pose_valid_frames;
+        ev.interval_health.num_degraded_frames = msg.interval_health.num_degraded_frames;
+        ev.interval_health.num_lost_frames = msg.interval_health.num_lost_frames;
+        ev.interval_health.min_tracks = msg.interval_health.min_tracks;
+        ev.interval_health.mean_tracks = msg.interval_health.mean_tracks;
+        ev.interval_health.min_track_retention = msg.interval_health.min_track_retention;
+        ev.interval_health.mean_track_retention = msg.interval_health.mean_track_retention;
+        ev.interval_health.mean_pnp_inlier_ratio = msg.interval_health.mean_pnp_inlier_ratio;
+        ev.interval_health.max_pnp_reproj_rmse_px = msg.interval_health.max_pnp_reproj_rmse_px;
+        ev.interval_health.min_track_coverage = msg.interval_health.min_track_coverage;
+        ev.interval_health.mean_track_coverage = msg.interval_health.mean_track_coverage;
 
         const size_t n = msg.track_ids.size();
         if (msg.u_l.size() != n || msg.v_l.size() != n ||

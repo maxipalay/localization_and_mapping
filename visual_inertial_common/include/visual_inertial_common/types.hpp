@@ -36,6 +36,23 @@ struct CameraRig
     }
 };
 
+struct FrontendIntervalHealth
+{
+    uint32_t num_frames = 0;
+    uint32_t num_pose_valid_frames = 0;
+    uint32_t num_degraded_frames = 0;
+    uint32_t num_lost_frames = 0;
+
+    int32_t min_tracks = 0;
+    double mean_tracks = 0.0;
+    double min_track_retention = 1.0;
+    double mean_track_retention = 1.0;
+    double mean_pnp_inlier_ratio = 0.0;
+    double max_pnp_reproj_rmse_px = -1.0;
+    double min_track_coverage = 0.0;
+    double mean_track_coverage = 0.0;
+};
+
 struct KeyframeEvent
 {
     using TrackId = uint32_t;
@@ -53,6 +70,7 @@ struct KeyframeEvent
     // meas = T_Bkm1_Bk.
     bool has_vo_between = false;
     Eigen::Isometry3d T_Bkm1_Bk = Eigen::Isometry3d::Identity();
+    FrontendIntervalHealth interval_health;
 
     // Tracked features for this keyframe (all vectors aligned by index)
     // ids[i] corresponds to pl[i] and (if available) pr[i].

@@ -147,6 +147,7 @@ private:
 
     double timestamp_last_kf_ = 0.0;
     int prev_frame_track_count_ = 0;
+    FrontendIntervalHealth interval_health_accum_{};
 
     // --- keyframe finalization queues (library-owned state, node-owned thread) ---
     mutable std::mutex kf_mtx_;
@@ -255,4 +256,7 @@ private:
     // Mask buffers
     cv::Mat mask_small_cpu_;
     cv::Mat mask_full_cpu_; // full-res CPU mask
+
+    void accumulateIntervalHealth_(const FrontendHealth &health);
+    void resetIntervalHealthAccumulator_();
 };

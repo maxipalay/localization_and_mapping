@@ -58,6 +58,7 @@ install(TARGETS tracking_node optimization_node path_viz_node tracks_viz_node
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/FrontendHealth.msg"
+  "msg/FrontendIntervalHealth.msg"
   "msg/Keyframe.msg"
   "msg/ImuBias.msg"
   "msg/OptimizationStats.msg"

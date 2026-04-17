@@ -241,6 +241,55 @@ VisualInertial::VisualInertial(const Params &p)
 {
 }
 
+void VisualInertial::resetIntervalHealthAccumulator_()
+{
+    interval_health_accum_ = FrontendIntervalHealth{};
+}
+
+void VisualInertial::accumulateIntervalHealth_(const FrontendHealth &health)
+{
+    auto &acc = interval_health_accum_;
+    const uint32_t next_count = acc.num_frames + 1;
+    const double prev_count = static_cast<double>(acc.num_frames);
+    const double next_count_d = static_cast<double>(next_count);
+
+    acc.num_frames = next_count;
+    if (health.pose_update_valid)
+        ++acc.num_pose_valid_frames;
+    if (health.state == FrontendHealth::STATE_DEGRADED)
+        ++acc.num_degraded_frames;
+    if (health.state == FrontendHealth::STATE_LOST)
+        ++acc.num_lost_frames;
+
+    if (next_count == 1)
+    {
+        acc.min_tracks = health.num_tracks;
+        acc.mean_tracks = static_cast<double>(health.num_tracks);
+        acc.min_track_retention = health.track_retention;
+        acc.mean_track_retention = health.track_retention;
+        acc.mean_pnp_inlier_ratio = health.pnp_inlier_ratio;
+        acc.max_pnp_reproj_rmse_px = health.pnp_reproj_rmse_px;
+        acc.min_track_coverage = health.track_coverage;
+        acc.mean_track_coverage = health.track_coverage;
+        return;
+    }
+
+    acc.min_tracks = std::min(acc.min_tracks, health.num_tracks);
+    acc.mean_tracks = ((acc.mean_tracks * prev_count) + static_cast<double>(health.num_tracks)) / next_count_d;
+    acc.min_track_retention = std::min(acc.min_track_retention, health.track_retention);
+    acc.mean_track_retention = ((acc.mean_track_retention * prev_count) + health.track_retention) / next_count_d;
+    acc.mean_pnp_inlier_ratio = ((acc.mean_pnp_inlier_ratio * prev_count) + health.pnp_inlier_ratio) / next_count_d;
+    if (health.pnp_reproj_rmse_px >= 0.0)
+    {
+        if (acc.max_pnp_reproj_rmse_px < 0.0)
+            acc.max_pnp_reproj_rmse_px = health.pnp_reproj_rmse_px;
+        else
+            acc.max_pnp_reproj_rmse_px = std::max(acc.max_pnp_reproj_rmse_px, health.pnp_reproj_rmse_px);
+    }
+    acc.min_track_coverage = std::min(acc.min_track_coverage, health.track_coverage);
+    acc.mean_track_coverage = ((acc.mean_track_coverage * prev_count) + health.track_coverage) / next_count_d;
+}
+
 void VisualInertial::processImu(const ImuSample &sample)
 {
     imu_preint_.push(sample.t_s, sample.accel, sample.gyro);
@@ -290,6 +339,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         output.health.track_coverage = computeTrackCoverage(gray8_left.size(), new_pts);
         output.health.track_retention = 1.0;
         prev_frame_track_count_ = output.health.num_tracks;
+        accumulateIntervalHealth_(output.health);
         first_frame_ = false;
         d_gray8_left_prev_ = d_gray8_left_.clone();
         return output;
@@ -540,6 +590,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     else
         output.health.state = FrontendHealth::STATE_TRACKING;
     prev_frame_track_count_ = output.health.num_tracks;
+    accumulateIntervalHealth_(output.health);
     //
     // SECTION - KEYFRAME EVALUATION AND CREATION
     //
@@ -621,6 +672,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
             ev.has_vo_between = false;
             ev.T_Bkm1_Bk = Eigen::Isometry3d::Identity();
         }
+        ev.interval_health = interval_health_accum_;
         // v.T_WC = vo_pose_abs_;
 
         // Tracks in deterministic order (same order across ids/pl/pr)
@@ -659,6 +711,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 
         timestamp_last_kf_ = stamp; // update last stamp
         prev_kf_id_ = ev.kf_id;
+        resetIntervalHealthAccumulator_();
     }
 
     ///
