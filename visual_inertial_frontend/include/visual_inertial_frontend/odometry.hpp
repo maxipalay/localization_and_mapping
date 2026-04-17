@@ -28,6 +28,8 @@ public:
         float stereo_disp_min = 3.0;
         float stereo_disp_max = 255.0;
         float fb_thr2 = 1.5 * 1.5;
+        int degraded_min_tracks = 120;
+        double degraded_min_track_retention = 0.6;
 
         static Eigen::Isometry3d default_T_BC()
         {
@@ -144,6 +146,7 @@ private:
     uint64_t prev_kf_id_ = 0;
 
     double timestamp_last_kf_ = 0.0;
+    int prev_frame_track_count_ = 0;
 
     // --- keyframe finalization queues (library-owned state, node-owned thread) ---
     mutable std::mutex kf_mtx_;

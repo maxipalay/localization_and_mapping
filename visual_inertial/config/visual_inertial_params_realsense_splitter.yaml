@@ -31,6 +31,8 @@ visual_inertial:
     stereo_disp_min: 3.0
     stereo_disp_max: 255.0
     fb_thr2: 2.25
+    degraded_min_tracks: 120
+    degraded_min_track_retention: 0.6
 
     kf_ready_queue_max: 30
     kf_pending_queue_max: 30

@@ -288,6 +288,8 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         output.health.num_tracks = static_cast<int>(new_pts.size());
         output.health.num_stereo_tracks = 0;
         output.health.track_coverage = computeTrackCoverage(gray8_left.size(), new_pts);
+        output.health.track_retention = 1.0;
+        prev_frame_track_count_ = output.health.num_tracks;
         first_frame_ = false;
         d_gray8_left_prev_ = d_gray8_left_.clone();
         return output;
@@ -524,13 +526,20 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     output.health.pnp_inlier_ratio =
         object_pts.empty() ? 0.0 : static_cast<double>(pnp_tracks_for_policy) / static_cast<double>(object_pts.size());
     output.health.track_coverage = computeTrackCoverage(gray8_left.size(), output.tracks);
+    output.health.track_retention =
+        prev_frame_track_count_ > 0
+            ? static_cast<double>(output.health.num_tracks) / static_cast<double>(prev_frame_track_count_)
+            : 1.0;
     output.health.pose_update_valid = have_pose_update;
-    if (have_pose_update)
-        output.health.state = FrontendHealth::STATE_TRACKING;
-    else if (output.tracks.empty())
+    if (output.tracks.empty())
         output.health.state = FrontendHealth::STATE_LOST;
-    else
+    else if (!have_pose_update ||
+             output.health.num_tracks < params_.degraded_min_tracks ||
+             output.health.track_retention < params_.degraded_min_track_retention)
         output.health.state = FrontendHealth::STATE_DEGRADED;
+    else
+        output.health.state = FrontendHealth::STATE_TRACKING;
+    prev_frame_track_count_ = output.health.num_tracks;
     //
     // SECTION - KEYFRAME EVALUATION AND CREATION
     //

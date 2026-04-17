@@ -14,6 +14,7 @@ int32 num_pnp_inliers
 float64 pnp_inlier_ratio
 float64 pnp_reproj_rmse_px
 float64 track_coverage
+float64 track_retention
 
 bool pose_update_valid
 uint8 state

@@ -19,6 +19,7 @@ struct FrontendHealth
     double pnp_inlier_ratio = 0.0;
     double pnp_reproj_rmse_px = -1.0;
     double track_coverage = 0.0;
+    double track_retention = 1.0;
 
     bool pose_update_valid = false;
     uint8_t state = STATE_UNKNOWN;

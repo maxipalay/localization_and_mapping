@@ -156,6 +156,10 @@ public:
         vi_params.stereo_disp_max = declare_parameter<double>(
             "stereo_disp_max", vi_params.stereo_disp_max);
         vi_params.fb_thr2 = declare_parameter<double>("fb_thr2", vi_params.fb_thr2);
+        vi_params.degraded_min_tracks = declare_parameter<int>(
+            "degraded_min_tracks", vi_params.degraded_min_tracks);
+        vi_params.degraded_min_track_retention = declare_parameter<double>(
+            "degraded_min_track_retention", vi_params.degraded_min_track_retention);
 
         vi_params.kf_ready_queue_max = static_cast<size_t>(declare_parameter<int>(
             "kf_ready_queue_max", static_cast<int>(vi_params.kf_ready_queue_max)));
@@ -537,6 +541,7 @@ private:
         health_msg.pnp_inlier_ratio = result.health.pnp_inlier_ratio;
         health_msg.pnp_reproj_rmse_px = result.health.pnp_reproj_rmse_px;
         health_msg.track_coverage = result.health.track_coverage;
+        health_msg.track_retention = result.health.track_retention;
         health_msg.pose_update_valid = result.health.pose_update_valid;
         health_msg.state = result.health.state;
         frontend_health_pub_->publish(health_msg);
