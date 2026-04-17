@@ -15,6 +15,7 @@
 #include "visual_inertial_frontend/types.hpp"
 #include "visual_inertial_frontend/odometry.hpp"
 
+#include "visual_inertial/msg/frontend_health.hpp"
 #include "visual_inertial/msg/keyframe.hpp"
 #include <std_msgs/msg/header.hpp>
 
@@ -119,6 +120,7 @@ public:
         left_info_t = declare_parameter<std::string>("left/camera_info", "/oak/left/camera_info");
         right_info_t = declare_parameter<std::string>("right/camera_info", "/oak/right/camera_info");
         tracks_topic_ = declare_parameter<std::string>("tracks_topic", "/tracks");
+        frontend_health_topic_ = declare_parameter<std::string>("frontend_health_topic", "/frontend_health");
 
         transport_ = declare_parameter<std::string>("transport", "compressed"); // or "raw"
 
@@ -130,6 +132,8 @@ public:
 
         // Publishers
         tracks_pub_ = create_publisher<visual_inertial::msg::Tracks>(tracks_topic_, rclcpp::SensorDataQoS());
+        frontend_health_pub_ = create_publisher<visual_inertial::msg::FrontendHealth>(
+            frontend_health_topic_, rclcpp::SensorDataQoS());
 
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
@@ -315,11 +319,13 @@ private:
 
     rclcpp::Publisher<visual_inertial::msg::Keyframe>::SharedPtr kf_pub_;
     rclcpp::Publisher<visual_inertial::msg::Tracks>::SharedPtr tracks_pub_;
+    rclcpp::Publisher<visual_inertial::msg::FrontendHealth>::SharedPtr frontend_health_pub_;
 
     std::string input_topic_left_, input_topic_right_, transport_;
     std::string input_topic_imu_;
     std::string left_info_t, right_info_t;
     std::string tracks_topic_;
+    std::string frontend_health_topic_;
 
     // image subscribers
     image_transport::SubscriberFilter sub_left_{}, sub_right_{};
@@ -520,6 +526,20 @@ private:
         }
 
         tracks_pub_->publish(tracks_msg);
+
+        visual_inertial::msg::FrontendHealth health_msg;
+        health_msg.header.stamp = left_msg->header.stamp;
+        health_msg.header.frame_id = parent_frame_;
+        health_msg.num_tracks = result.health.num_tracks;
+        health_msg.num_stereo_tracks = result.health.num_stereo_tracks;
+        health_msg.num_pnp_candidates = result.health.num_pnp_candidates;
+        health_msg.num_pnp_inliers = result.health.num_pnp_inliers;
+        health_msg.pnp_inlier_ratio = result.health.pnp_inlier_ratio;
+        health_msg.pnp_reproj_rmse_px = result.health.pnp_reproj_rmse_px;
+        health_msg.track_coverage = result.health.track_coverage;
+        health_msg.pose_update_valid = result.health.pose_update_valid;
+        health_msg.state = result.health.state;
+        frontend_health_pub_->publish(health_msg);
 
 
         auto t1 = std::chrono::steady_clock::now();

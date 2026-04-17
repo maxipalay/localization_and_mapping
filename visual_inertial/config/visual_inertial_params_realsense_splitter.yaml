@@ -19,6 +19,7 @@ visual_inertial:
     right/camera_info: /camera0/infra2/camera_info
 
     tracks_topic: /tracks
+    frontend_health_topic: /frontend_health
     transport: raw
     queue_size: 3
     stereo_slop_s: 0.01

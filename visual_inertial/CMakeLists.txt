@@ -20,6 +20,7 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(Boost REQUIRED COMPONENTS serialization)
 find_package(eigen3_cmake_module REQUIRED)
 
@@ -56,12 +57,13 @@ install(TARGETS tracking_node optimization_node path_viz_node tracks_viz_node
   RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/FrontendHealth.msg"
   "msg/Keyframe.msg"
   "msg/ImuBias.msg"
   "msg/OptimizationStats.msg"
   "msg/OptimizationResult.msg"
   "msg/Tracks.msg"
-  DEPENDENCIES builtin_interfaces sensor_msgs geometry_msgs
+  DEPENDENCIES builtin_interfaces sensor_msgs geometry_msgs std_msgs
 )
 
 rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_typesupport_cpp")

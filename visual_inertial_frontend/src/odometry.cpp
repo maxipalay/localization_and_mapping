@@ -65,6 +65,72 @@ static inline size_t countSetFlags(const std::vector<uint8_t> &flags)
         { return v != 0; }));
 }
 
+static double computeTrackCoverage(const cv::Size &full_sz,
+                                   const std::vector<cv::Point2f> &pts,
+                                   int grid_cols = 4,
+                                   int grid_rows = 4)
+{
+    if (pts.empty() || full_sz.width <= 0 || full_sz.height <= 0 ||
+        grid_cols <= 0 || grid_rows <= 0)
+    {
+        return 0.0;
+    }
+
+    std::vector<uint8_t> occupied(static_cast<size_t>(grid_cols * grid_rows), uint8_t{0});
+    size_t occupied_count = 0;
+
+    for (const auto &p : pts)
+    {
+        if (p.x < 0.f || p.y < 0.f || p.x >= static_cast<float>(full_sz.width) ||
+            p.y >= static_cast<float>(full_sz.height))
+        {
+            continue;
+        }
+
+        const int cell_x = std::min(grid_cols - 1,
+                                    std::max(0, static_cast<int>((p.x / full_sz.width) * grid_cols)));
+        const int cell_y = std::min(grid_rows - 1,
+                                    std::max(0, static_cast<int>((p.y / full_sz.height) * grid_rows)));
+        const size_t idx = static_cast<size_t>(cell_y * grid_cols + cell_x);
+        if (occupied[idx] == 0)
+        {
+            occupied[idx] = 1;
+            ++occupied_count;
+        }
+    }
+
+    return static_cast<double>(occupied_count) / static_cast<double>(grid_cols * grid_rows);
+}
+
+static double computePnPReprojRmsePx(const std::vector<cv::Point3f> &object_pts,
+                                     const std::vector<cv::Point2f> &image_pts,
+                                     const cv::Mat &rvec,
+                                     const cv::Mat &tvec,
+                                     const cv::Matx33d &K_left)
+{
+    if (object_pts.empty() || image_pts.size() != object_pts.size())
+    {
+        return -1.0;
+    }
+
+    std::vector<cv::Point2f> projected;
+    cv::projectPoints(object_pts, rvec, tvec, K_left, cv::noArray(), projected);
+    if (projected.size() != image_pts.size())
+    {
+        return -1.0;
+    }
+
+    double sum_sq = 0.0;
+    for (size_t i = 0; i < projected.size(); ++i)
+    {
+        const double dx = static_cast<double>(projected[i].x - image_pts[i].x);
+        const double dy = static_cast<double>(projected[i].y - image_pts[i].y);
+        sum_sq += dx * dx + dy * dy;
+    }
+
+    return std::sqrt(sum_sq / static_cast<double>(projected.size()));
+}
+
 static inline void selectDistributedTopupPoints(
     const cv::Size &full_sz,
     const std::vector<cv::Point2f> &candidates,
@@ -186,6 +252,8 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
 {
     FrameResult output;
     output.stamp = stamp;
+    output.health.state = FrontendHealth::STATE_UNKNOWN;
+    output.health.pnp_reproj_rmse_px = -1.0;
 
     // check our calibration is valid, if not return
     if (!calibration_.valid())
@@ -216,6 +284,10 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
             params_.target_features,
             new_pts);
         tracks_buffer_.addNewLeft(new_pts);
+        output.tracks = new_pts;
+        output.health.num_tracks = static_cast<int>(new_pts.size());
+        output.health.num_stereo_tracks = 0;
+        output.health.track_coverage = computeTrackCoverage(gray8_left.size(), new_pts);
         first_frame_ = false;
         d_gray8_left_prev_ = d_gray8_left_.clone();
         return output;
@@ -406,6 +478,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
                                   params_.pnp_refine_max_iters,
                                   params_.pnp_refine_eps);
             cv::solvePnPRefineLM(obj_in, img_in, K_left, cv::Mat(), rvec, tvec, crit);
+            output.health.pnp_reproj_rmse_px = computePnPReprojRmsePx(obj_in, img_in, rvec, tvec, K_left);
 
             // -----------------------------
             // 5) Gate DB based on PnP inliers (B-style: drop eligible outliers only)
@@ -444,6 +517,20 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     // add the tracks up to this point to the output, these are the tracks that helped steer the current update
     // these tracks we born at least on the last frame, and passed our temporal + stereo gates, and the pnp gate
     output.tracks = tracks_buffer_.pl();
+    output.health.num_tracks = static_cast<int>(output.tracks.size());
+    output.health.num_stereo_tracks = static_cast<int>(countSetFlags(tracks_buffer_.hasRight()));
+    output.health.num_pnp_candidates = static_cast<int>(object_pts.size());
+    output.health.num_pnp_inliers = static_cast<int>(pnp_tracks_for_policy);
+    output.health.pnp_inlier_ratio =
+        object_pts.empty() ? 0.0 : static_cast<double>(pnp_tracks_for_policy) / static_cast<double>(object_pts.size());
+    output.health.track_coverage = computeTrackCoverage(gray8_left.size(), output.tracks);
+    output.health.pose_update_valid = have_pose_update;
+    if (have_pose_update)
+        output.health.state = FrontendHealth::STATE_TRACKING;
+    else if (output.tracks.empty())
+        output.health.state = FrontendHealth::STATE_LOST;
+    else
+        output.health.state = FrontendHealth::STATE_DEGRADED;
     //
     // SECTION - KEYFRAME EVALUATION AND CREATION
     //
