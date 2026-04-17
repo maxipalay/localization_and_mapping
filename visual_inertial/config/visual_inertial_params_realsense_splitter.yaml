@@ -31,7 +31,6 @@ visual_inertial:
     stereo_disp_max: 255.0
     fb_thr2: 2.25
 
-    imu_coverage_margin_s: 0.05
     kf_ready_queue_max: 30
     kf_pending_queue_max: 30
 

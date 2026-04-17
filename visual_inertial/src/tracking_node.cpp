@@ -153,8 +153,6 @@ public:
             "stereo_disp_max", vi_params.stereo_disp_max);
         vi_params.fb_thr2 = declare_parameter<double>("fb_thr2", vi_params.fb_thr2);
 
-        vi_params.imu_coverage_margin_s = declare_parameter<double>(
-            "imu_coverage_margin_s", vi_params.imu_coverage_margin_s);
         vi_params.kf_ready_queue_max = static_cast<size_t>(declare_parameter<int>(
             "kf_ready_queue_max", static_cast<int>(vi_params.kf_ready_queue_max)));
         vi_params.kf_pending_queue_max = static_cast<size_t>(declare_parameter<int>(

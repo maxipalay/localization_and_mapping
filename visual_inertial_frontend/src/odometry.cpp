@@ -143,6 +143,28 @@ static inline void isometryToRvecTvec(
         tvec.at<double>(r, 0) = T.translation()(r);
 }
 
+static const char *imuBuildStatusToString(ImuPreintegrator::BuildStatus status)
+{
+    using BuildStatus = ImuPreintegrator::BuildStatus;
+    switch (status)
+    {
+    case BuildStatus::kSuccess:
+        return "success";
+    case BuildStatus::kInvalidInterval:
+        return "invalid_interval";
+    case BuildStatus::kBufferEmpty:
+        return "buffer_empty";
+    case BuildStatus::kNoCoverageToT1:
+        return "no_coverage_to_t1";
+    case BuildStatus::kNoAnchorAtOrBeforeT0:
+        return "no_anchor_at_or_before_t0";
+    case BuildStatus::kNoSamplesInInterval:
+        return "no_samples_in_interval";
+    default:
+        return "unknown";
+    }
+}
+
 VisualInertial::VisualInertial(const Params &p)
     : params_(p),
       feature_detector_(FeatureDetector::Params{}, &stream_),
@@ -414,6 +436,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
                 vo_pose_abs_ = ref_kf_pose_abs_ * T_Ck_Cref.inverse();
         }
     }
+
     const Eigen::Isometry3d T_BC = params_.T_BC;
     const Eigen::Isometry3d T_CB = T_BC.inverse();
     output.vo_pose_rel = T_BC * (pose_prev.inverse() * vo_pose_abs_) * T_CB;
@@ -633,14 +656,6 @@ bool VisualInertial::tryPopFinalizedKeyframe(KeyframeEvent &out)
     return true;
 }
 
-bool VisualInertial::hasImuCoverageForFinalize_(double t1) const
-{
-    // Margin-based coverage check (less brittle than exact comparisons).
-    // Adjust names if your ImuPreintegrator API differs.
-    return imu_preint_.size() >= 2 &&
-           imu_preint_.newestTime() >= (t1 - params_.imu_coverage_margin_s);
-}
-
 bool VisualInertial::tryFinalizeOne()
 {
     KeyframeEvent ev;
@@ -709,22 +724,24 @@ bool VisualInertial::tryFinalizeOne()
         return true;
     }
 
-    // 3) If not enough IMU yet, keep pending and try later
-    // (Use your existing coverage function if you have it; this margin-based check is what you were using.)
-    const bool have_cov = hasImuCoverageForFinalize_(t1);
-    if (!have_cov)
-        return false;
+    // 3) Attempt to build the exact IMU packet for [t0, t1]. If it is not ready yet,
+    // keep the keyframe pending and retry later. Invalid intervals should not happen
+    // here if the chain checks above are correct, but log them explicitly if they do.
+    auto build = imu_preint_.buildAndConsume(prev_id, t0, ev.kf_id, t1);
 
-    // 4) Attempt to build packet. If it fails due to timing, DO NOT drop KF; retry later.
-    auto pkt_opt = imu_preint_.buildAndConsume(prev_id, t0, ev.kf_id, t1);
-
-    if (!pkt_opt || !pkt_opt->valid)
+    if (!build.ok())
     {
-        // If we *thought* we had coverage but build still failed, it's almost always boundary timing.
-        // Treat as "not ready yet" and retry on the next worker wakeup.
-        // (If you want a hard timeout, you can add it later.)
+        using BuildStatus = ImuPreintegrator::BuildStatus;
+        const BuildStatus status = build.status;
+
+        if (status == BuildStatus::kNoCoverageToT1 || status == BuildStatus::kBufferEmpty)
+        {
+            return false;
+        }
+
         std::cout << std::fixed << std::setprecision(6)
-                  << "[KFfinal] pkt not ready, will retry: kf_id=" << ev.kf_id
+                  << "[KFfinal] pkt build failed: kf_id=" << ev.kf_id
+                  << " status=" << imuBuildStatusToString(status)
                   << " t0=" << t0 << " t1=" << t1
                   << " imu_new=" << imu_preint_.newestTime()
                   << " imu_old=" << imu_preint_.oldestTime()
@@ -733,9 +750,9 @@ bool VisualInertial::tryFinalizeOne()
         return false;
     }
 
-    // 5) Success: now pop pending and publish finalized
+    // 4) Success: now pop pending and publish finalized
     ev.has_imu = true;
-    ev.pim_bytes = std::move(pkt_opt->bytes);
+    ev.pim_bytes = std::move(build.packet.bytes);
 
     {
         std::lock_guard<std::mutex> lk(kf_mtx_);

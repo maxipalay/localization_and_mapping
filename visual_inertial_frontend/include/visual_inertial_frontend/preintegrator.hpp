@@ -15,7 +15,6 @@
 // Assumptions for this FIRST PASS:
 // - IMU timestamps are in the SAME time domain as camera/keyframe timestamps.
 // - No time offset handling.
-// - You call buildAndConsume(...) only when you have IMU coverage up to t1.
 // - Half-open interval: integrate (t0, t1] and then drop all samples <= t1
 //   (optionally keep one anchor sample at/before t1).
 
@@ -38,6 +37,24 @@ struct ImuPreintegratorConfig {
 class ImuPreintegrator {
 public:
   using Packet    = PreintegratedImuPacket;   // from visual_inertial_common/types.hpp (or wherever you put it)
+
+  enum class BuildStatus : uint8_t {
+    kSuccess = 0,
+    kInvalidInterval,
+    kBufferEmpty,
+    kNoCoverageToT1,
+    kNoAnchorAtOrBeforeT0,
+    kNoSamplesInInterval,
+  };
+
+  struct BuildResult {
+    BuildStatus status = BuildStatus::kBufferEmpty;
+    Packet packet{};
+
+    bool ok() const {
+      return status == BuildStatus::kSuccess && packet.valid;
+    }
+  };
 
   explicit ImuPreintegrator(const ImuPreintegratorConfig& cfg = {});
   ~ImuPreintegrator() = default;
@@ -63,12 +80,9 @@ public:
 
   // ---- Preintegration (simple API) ----
   // Build a packet for interval (t0, t1] and CONSUME samples <= t1 from the buffer.
-  // Returns nullopt if there isn't enough IMU coverage.
-  //
-  // Packet is expected to contain:
-  //  - kf_id0/kf_id1, t0/t1, bias_hat, bytes, valid flag
-  std::optional<Packet> buildAndConsume(uint64_t kf_id0, double t0_s,
-                                        uint64_t kf_id1, double t1_s);
+  // Returns a status so callers can distinguish "not ready yet" from "bad interval".
+  BuildResult buildAndConsume(uint64_t kf_id0, double t0_s,
+                              uint64_t kf_id1, double t1_s);
 
 private:
   void pruneLocked_();

@@ -41,7 +41,6 @@ public:
 
         Eigen::Isometry3d T_BC = default_T_BC();
 
-        double imu_coverage_margin_s = 0.05;
         size_t kf_ready_queue_max = 30;
         size_t kf_pending_queue_max = 30;
 
@@ -95,10 +94,10 @@ public:
         return imu_preint_.hasCoverage(t_s);
     }
 
-    std::optional<PreintegratedImuPacket> buildImuPacket(uint64_t prev_kf_id,
-                                                         double t0_s,
-                                                         uint64_t kf_id,
-                                                         double t1_s)
+    ImuPreintegrator::BuildResult buildImuPacket(uint64_t prev_kf_id,
+                                                 double t0_s,
+                                                 uint64_t kf_id,
+                                                 double t1_s)
     {
         return imu_preint_.buildAndConsume(prev_kf_id, t0_s, kf_id, t1_s);
     }
@@ -157,8 +156,6 @@ private:
 
     // Internal helpers
     void submitPendingKeyframe_(KeyframeEvent &&ev);
-    bool hasImuCoverageForFinalize_(double t1) const;
-
     struct Scratch
     {
         // Temporal LK

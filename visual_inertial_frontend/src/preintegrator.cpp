@@ -184,13 +184,16 @@ void ImuPreintegrator::pruneLocked_()
     }
 }
 
-std::optional<ImuPreintegrator::Packet> ImuPreintegrator::buildAndConsume(
+ImuPreintegrator::BuildResult ImuPreintegrator::buildAndConsume(
     uint64_t kf_id0, double t0_s,
     uint64_t kf_id1, double t1_s)
 {
+    BuildResult result;
+
     if (!std::isfinite(t0_s) || !std::isfinite(t1_s) || !(t1_s > t0_s))
     {
-        return std::nullopt;
+        result.status = BuildStatus::kInvalidInterval;
+        return result;
     }
 
     // Copy out integration knots under lock, and consume buffer up to t1
@@ -201,14 +204,20 @@ std::optional<ImuPreintegrator::Packet> ImuPreintegrator::buildAndConsume(
         std::lock_guard<std::mutex> lk(mtx_);
 
         if (buf_.empty())
-            return std::nullopt;
+        {
+            result.status = BuildStatus::kBufferEmpty;
+            return result;
+        }
         if (sample_time(buf_.back()) < t1_s)
-            return std::nullopt; // no coverage yet
+        {
+            result.status = BuildStatus::kNoCoverageToT1;
+            return result; // no coverage yet
+        }
 
         bias_hat_local = bias_hat_;
 
         // first sample with t > t0
-        auto it_first = std::upper_bound(
+        auto it_first_gt_t0 = std::upper_bound(
             buf_.begin(), buf_.end(), t0_s,
             [](double t, const ImuSample &s)
             { return t < sample_time(s); });
@@ -219,31 +228,31 @@ std::optional<ImuPreintegrator::Packet> ImuPreintegrator::buildAndConsume(
             [](double t, const ImuSample &s)
             { return t < sample_time(s); });
 
-        if (it_first == buf_.end())
-            return std::nullopt;
-        if (sample_time(*it_first) > t1_s)
-            return std::nullopt; // no samples in (t0,t1]
+        if (it_first_gt_t0 == buf_.begin())
+        {
+            result.status = BuildStatus::kNoAnchorAtOrBeforeT0;
+            return result;
+        }
 
         // Measurement to use at t0: last sample <= t0 if available else first > t0
-        ImuSample meas0 = *it_first;
-        if (it_first != buf_.begin())
+        ImuSample meas0 = *std::prev(it_first_gt_t0);
+        if (sample_time(meas0) > t0_s)
         {
-            const auto it_prev = std::prev(it_first);
-            if (sample_time(*it_prev) <= t0_s)
-                meas0 = *it_prev;
+            result.status = BuildStatus::kNoAnchorAtOrBeforeT0;
+            return result;
         }
 
         // Build knot list:
         //  - synthetic sample at t0 using meas0
         //  - all real samples in (t0, t1]
         //  - synthetic endpoint at t1 if needed
-        knots.reserve(static_cast<size_t>(std::distance(it_first, it_end)) + 2);
+        knots.reserve(static_cast<size_t>(std::distance(it_first_gt_t0, it_end)) + 2);
 
         ImuSample k0 = meas0;
         sample_time(k0) = t0_s;
         knots.push_back(k0);
 
-        for (auto it = it_first; it != it_end; ++it)
+        for (auto it = it_first_gt_t0; it != it_end; ++it)
         {
             if (sample_time(*it) <= t0_s)
                 continue;
@@ -253,7 +262,10 @@ std::optional<ImuPreintegrator::Packet> ImuPreintegrator::buildAndConsume(
         }
 
         if (knots.size() < 2)
-            return std::nullopt;
+        {
+            result.status = BuildStatus::kNoSamplesInInterval;
+            return result;
+        }
 
         if (sample_time(knots.back()) < t1_s)
         {
@@ -323,5 +335,7 @@ std::optional<ImuPreintegrator::Packet> ImuPreintegrator::buildAndConsume(
     pkt.bytes = std::move(bytes);
     pkt.valid = !pkt.bytes.empty();
 
-    return pkt;
+    result.status = pkt.valid ? BuildStatus::kSuccess : BuildStatus::kNoSamplesInInterval;
+    result.packet = std::move(pkt);
+    return result;
 }
