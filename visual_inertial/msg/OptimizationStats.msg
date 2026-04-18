@@ -5,4 +5,19 @@ int32 num_landmarks_created
 int32 num_stereo_factors_added
 int32 num_between_factors_added
 int32 num_prior_factors_added
+
+int32 update_iterations
+int32 update_intermediate_steps
+int32 update_nonlinear_variables
+int32 update_linear_variables
+
 float64 final_error
+bool has_error_before
+float64 error_before
+bool has_error_after
+float64 error_after
+
+int32 variables_relinearized
+int32 variables_reeliminated
+int32 factors_recalculated
+int32 cliques

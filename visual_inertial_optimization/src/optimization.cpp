@@ -182,6 +182,7 @@
 #include "visual_inertial_optimization/optimization.hpp"
 
 #include <cmath>
+#include <array>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -378,6 +379,20 @@ static bool deserializePim_(
     std::cout << "[Optimizer] PIM deserialize unknown exception\n";
     return false;
   }
+}
+
+template <size_t Rows, size_t Cols>
+static std::array<double, Rows * Cols> toRowMajorArray_(const gtsam::Matrix &M)
+{
+  std::array<double, Rows * Cols> out{};
+  for (size_t r = 0; r < Rows; ++r)
+  {
+    for (size_t c = 0; c < Cols; ++c)
+    {
+      out[r * Cols + c] = M(static_cast<Eigen::Index>(r), static_cast<Eigen::Index>(c));
+    }
+  }
+  return out;
 }
 
 std::optional<OptimizationResult> Optimizer::push(
@@ -618,9 +633,10 @@ std::optional<OptimizationResult> Optimizer::push(
     landmark_last_seen_kf_[tid] = kf.kf_id;
   }
 
+  gtsam::FixedLagSmoother::Result update_result;
   try
   {
-    smoother_.update(newFactors, newValues, timestamps);
+    update_result = smoother_.update(newFactors, newValues, timestamps);
   }
   catch (const std::exception &e)
   {
@@ -654,7 +670,21 @@ std::optional<OptimizationResult> Optimizer::push(
     return std::nullopt;
   }
 
-  // After update() succeeds and you have xk, vk, bk keys:
+  try
+  {
+    const gtsam::Vector3 v_k = smoother_.calculateEstimate<gtsam::Vector3>(vk);
+    out.velocity_opt = Eigen::Vector3d(v_k.x(), v_k.y(), v_k.z());
+    out.has_velocity = true;
+  }
+  catch (const std::exception &e)
+  {
+    std::cout << "[Optimizer] Failed to read velocity estimate: " << e.what() << std::endl;
+  }
+  catch (...)
+  {
+    std::cout << "[Optimizer] Failed to read velocity estimate (unknown)\n";
+  }
+
   try
   {
     const gtsam::imuBias::ConstantBias b_k =
@@ -678,12 +708,68 @@ std::optional<OptimizationResult> Optimizer::push(
     std::cout << "[Optimizer] Failed to read bias estimate (unknown)\n";
   }
 
+  try
+  {
+    out.pose_wb_covariance = toRowMajorArray_<6, 6>(smoother_.marginalCovariance(xk));
+    out.has_pose_wb_covariance = true;
+  }
+  catch (const std::exception &e)
+  {
+    std::cout << "[Optimizer] Failed to read pose covariance: " << e.what() << std::endl;
+  }
+  catch (...)
+  {
+    std::cout << "[Optimizer] Failed to read pose covariance (unknown)\n";
+  }
+
+  try
+  {
+    out.velocity_covariance = toRowMajorArray_<3, 3>(smoother_.marginalCovariance(vk));
+    out.has_velocity_covariance = true;
+  }
+  catch (const std::exception &e)
+  {
+    std::cout << "[Optimizer] Failed to read velocity covariance: " << e.what() << std::endl;
+  }
+  catch (...)
+  {
+    std::cout << "[Optimizer] Failed to read velocity covariance (unknown)\n";
+  }
+
+  try
+  {
+    out.bias_covariance = toRowMajorArray_<6, 6>(smoother_.marginalCovariance(bk));
+    out.has_bias_covariance = true;
+  }
+  catch (const std::exception &e)
+  {
+    std::cout << "[Optimizer] Failed to read bias covariance: " << e.what() << std::endl;
+  }
+  catch (...)
+  {
+    std::cout << "[Optimizer] Failed to read bias covariance (unknown)\n";
+  }
+
+  const auto &isam_result = smoother_.getISAM2Result();
   out.stats.num_keyframes_in_window = static_cast<int>(cfg_.window_size);
   out.stats.num_landmarks_alive = static_cast<int>(landmark_last_seen_kf_.size());
   out.stats.num_landmarks_created = landmarks_created;
   out.stats.num_stereo_factors_added = stereo_factors_added;
   out.stats.num_between_factors_added = between_added;
   out.stats.num_prior_factors_added = prior_added;
+  out.stats.update_iterations = static_cast<int>(update_result.iterations);
+  out.stats.update_intermediate_steps = static_cast<int>(update_result.intermediateSteps);
+  out.stats.update_nonlinear_variables = static_cast<int>(update_result.nonlinearVariables);
+  out.stats.update_linear_variables = static_cast<int>(update_result.linearVariables);
+  out.stats.final_error = update_result.error;
+  out.stats.has_error_before = isam_result.errorBefore.has_value();
+  out.stats.error_before = isam_result.errorBefore.value_or(-1.0);
+  out.stats.has_error_after = isam_result.errorAfter.has_value();
+  out.stats.error_after = isam_result.errorAfter.value_or(-1.0);
+  out.stats.variables_relinearized = static_cast<int>(isam_result.variablesRelinearized);
+  out.stats.variables_reeliminated = static_cast<int>(isam_result.variablesReeliminated);
+  out.stats.factors_recalculated = static_cast<int>(isam_result.factorsRecalculated);
+  out.stats.cliques = static_cast<int>(isam_result.cliques);
 
   initialized_ = true;
   last_kf_id_ = kf.kf_id;

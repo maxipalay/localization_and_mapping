@@ -645,13 +645,35 @@ private:
             opt_msg.stats.num_stereo_factors_added = res->stats.num_stereo_factors_added;
             opt_msg.stats.num_between_factors_added = res->stats.num_between_factors_added;
             opt_msg.stats.num_prior_factors_added = res->stats.num_prior_factors_added;
+            opt_msg.stats.update_iterations = res->stats.update_iterations;
+            opt_msg.stats.update_intermediate_steps = res->stats.update_intermediate_steps;
+            opt_msg.stats.update_nonlinear_variables = res->stats.update_nonlinear_variables;
+            opt_msg.stats.update_linear_variables = res->stats.update_linear_variables;
             opt_msg.stats.final_error = res->stats.final_error;
+            opt_msg.stats.has_error_before = res->stats.has_error_before;
+            opt_msg.stats.error_before = res->stats.error_before;
+            opt_msg.stats.has_error_after = res->stats.has_error_after;
+            opt_msg.stats.error_after = res->stats.error_after;
+            opt_msg.stats.variables_relinearized = res->stats.variables_relinearized;
+            opt_msg.stats.variables_reeliminated = res->stats.variables_reeliminated;
+            opt_msg.stats.factors_recalculated = res->stats.factors_recalculated;
+            opt_msg.stats.cliques = res->stats.cliques;
+            opt_msg.has_velocity = res->has_velocity;
+            opt_msg.velocity_opt.x = res->velocity_opt.x();
+            opt_msg.velocity_opt.y = res->velocity_opt.y();
+            opt_msg.velocity_opt.z = res->velocity_opt.z();
             opt_msg.accel_bias.x = res->bias_opt.accel.x();
             opt_msg.accel_bias.y = res->bias_opt.accel.y();
             opt_msg.accel_bias.z = res->bias_opt.accel.z();
             opt_msg.gyro_bias.x = res->bias_opt.gyro.x();
             opt_msg.gyro_bias.y = res->bias_opt.gyro.y();
             opt_msg.gyro_bias.z = res->bias_opt.gyro.z();
+            opt_msg.has_pose_wb_covariance = res->has_pose_wb_covariance;
+            opt_msg.pose_wb_covariance = res->pose_wb_covariance;
+            opt_msg.has_velocity_covariance = res->has_velocity_covariance;
+            opt_msg.velocity_covariance = res->velocity_covariance;
+            opt_msg.has_bias_covariance = res->has_bias_covariance;
+            opt_msg.bias_covariance = res->bias_covariance;
             if (optimization_result_pub_)
                 optimization_result_pub_->publish(opt_msg);
 

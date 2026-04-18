@@ -581,10 +581,26 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
             ? static_cast<double>(output.health.num_tracks) / static_cast<double>(prev_frame_track_count_)
             : 1.0;
     output.health.pose_update_valid = have_pose_update;
+
+    KeyframePolicy::Input kf_in;
+    kf_in.t_s = stamp;
+    kf_in.T_WC = vo_pose_abs_;
+    kf_in.pose_valid = have_pose_update;
+    kf_in.track_ids = tracks_buffer_.ids().data();
+    kf_in.num_tracks = tracks_buffer_.ids().size();
+    kf_in.num_pnp_tracks = pnp_tracks_for_policy;
+
+    KeyframePolicy::Decision dec = keyframe_policy_.evaluate(kf_in);
+
+    const bool low_tracks = output.health.num_tracks < params_.degraded_min_tracks;
+    const bool shared_ratio_check_enabled = params_.kf_policy_cfg.min_shared_ratio >= 0.0;
+    const bool low_tracks_with_low_shared_ratio =
+        low_tracks && (!shared_ratio_check_enabled || dec.shared_ratio < params_.kf_policy_cfg.min_shared_ratio);
+
     if (output.tracks.empty())
         output.health.state = FrontendHealth::STATE_LOST;
     else if (!have_pose_update ||
-             output.health.num_tracks < params_.degraded_min_tracks ||
+             low_tracks_with_low_shared_ratio ||
              output.health.track_retention < params_.degraded_min_track_retention)
         output.health.state = FrontendHealth::STATE_DEGRADED;
     else
@@ -598,17 +614,6 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
     // if generate keyframe -> create a keyframe and put in return struct
 
     // 1) Ask the policy if we should create a keyframe
-    KeyframePolicy::Input kf_in;
-    kf_in.t_s = stamp;
-    kf_in.T_WC = vo_pose_abs_;
-    kf_in.pose_valid = have_pose_update;
-
-    kf_in.track_ids = tracks_buffer_.ids().data();
-    kf_in.num_tracks = tracks_buffer_.ids().size();
-    kf_in.num_pnp_tracks = pnp_tracks_for_policy;
-
-    KeyframePolicy::Decision dec = keyframe_policy_.evaluate(kf_in);
-
     // 2) If yes: build the keyframe event (1–10 Hz, copying vectors is fine)
     if (dec.make_keyframe)
     {
