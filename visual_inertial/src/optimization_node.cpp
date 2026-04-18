@@ -232,6 +232,22 @@ public:
         cfg_.between_rot_sigma_rad = declare_parameter<double>("between_rot_sigma_rad", cfg_.between_rot_sigma_rad);
         cfg_.between_trans_sigma_m = declare_parameter<double>("between_trans_sigma_m", cfg_.between_trans_sigma_m);
         cfg_.between_huber_k = declare_parameter<double>("between_huber_k", cfg_.between_huber_k);
+        cfg_.use_interval_health_for_vo_between = declare_parameter<bool>(
+            "use_interval_health_for_vo_between", cfg_.use_interval_health_for_vo_between);
+        cfg_.between_health_min_pose_valid_fraction = declare_parameter<double>(
+            "between_health_min_pose_valid_fraction", cfg_.between_health_min_pose_valid_fraction);
+        cfg_.between_health_min_track_retention = declare_parameter<double>(
+            "between_health_min_track_retention", cfg_.between_health_min_track_retention);
+        cfg_.between_health_min_pnp_inlier_ratio = declare_parameter<double>(
+            "between_health_min_pnp_inlier_ratio", cfg_.between_health_min_pnp_inlier_ratio);
+        cfg_.between_health_min_track_coverage = declare_parameter<double>(
+            "between_health_min_track_coverage", cfg_.between_health_min_track_coverage);
+        cfg_.between_health_max_pnp_reproj_rmse_px = declare_parameter<double>(
+            "between_health_max_pnp_reproj_rmse_px", cfg_.between_health_max_pnp_reproj_rmse_px);
+        cfg_.between_health_max_sigma_scale = declare_parameter<double>(
+            "between_health_max_sigma_scale", cfg_.between_health_max_sigma_scale);
+        cfg_.between_health_skip_quality = declare_parameter<double>(
+            "between_health_skip_quality", cfg_.between_health_skip_quality);
 
         cfg_.use_imu = declare_parameter<bool>("use_imu", cfg_.use_imu);
 

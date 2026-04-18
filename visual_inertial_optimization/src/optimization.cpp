@@ -277,6 +277,81 @@ static gtsam::SharedNoiseModel maybeHuberize_(
       base_noise);
 }
 
+static double clamp01_(double x)
+{
+  return std::clamp(x, 0.0, 1.0);
+}
+
+static double normalizedFloorScore_(double value, double min_acceptable)
+{
+  if (min_acceptable <= 0.0)
+  {
+    return 1.0;
+  }
+  return clamp01_(value / min_acceptable);
+}
+
+static double normalizedCeilingScore_(double value, double max_acceptable)
+{
+  if (value < 0.0 || max_acceptable <= 0.0)
+  {
+    return 1.0;
+  }
+  return clamp01_(max_acceptable / std::max(value, 1e-9));
+}
+
+static double computeVoBetweenIntervalQuality_(
+    const FrontendIntervalHealth &health,
+    const OptimizationConfig &cfg)
+{
+  if (health.num_frames == 0)
+  {
+    return 1.0;
+  }
+
+  const double num_frames = static_cast<double>(health.num_frames);
+  const double pose_valid_fraction =
+      static_cast<double>(health.num_pose_valid_frames) / num_frames;
+  const double degraded_fraction =
+      static_cast<double>(health.num_degraded_frames) / num_frames;
+  const double lost_fraction =
+      static_cast<double>(health.num_lost_frames) / num_frames;
+
+  const double pose_valid_score =
+      normalizedFloorScore_(pose_valid_fraction, cfg.between_health_min_pose_valid_fraction);
+  const double retention_score =
+      normalizedFloorScore_(health.min_track_retention, cfg.between_health_min_track_retention);
+  const double pnp_score =
+      normalizedFloorScore_(health.mean_pnp_inlier_ratio, cfg.between_health_min_pnp_inlier_ratio);
+  const double coverage_score =
+      normalizedFloorScore_(health.min_track_coverage, cfg.between_health_min_track_coverage);
+  const double rmse_score =
+      normalizedCeilingScore_(health.max_pnp_reproj_rmse_px, cfg.between_health_max_pnp_reproj_rmse_px);
+  const double state_score = clamp01_(1.0 - std::max(degraded_fraction, lost_fraction));
+
+  return std::min({pose_valid_score, retention_score, pnp_score, coverage_score, rmse_score, state_score});
+}
+
+static bool shouldSkipVoBetweenInterval_(
+    const FrontendIntervalHealth &health,
+    const OptimizationConfig &cfg,
+    double interval_quality)
+{
+  if (health.num_frames == 0)
+  {
+    return false;
+  }
+
+  if (interval_quality >= cfg.between_health_skip_quality)
+  {
+    return false;
+  }
+
+  // Only skip when the interval is both low-quality and effectively has no
+  // usable visual pose support. Otherwise keep a very loose between-factor.
+  return health.num_pose_valid_frames == 0;
+}
+
 static bool deserializePim_(
     const std::vector<uint8_t> &bytes,
     gtsam::PreintegratedCombinedMeasurements *out)
@@ -434,16 +509,42 @@ std::optional<OptimizationResult> Optimizer::push(
   {
     const gtsam::Key xkm1 = X_(last_kf_id_);
     const gtsam::Pose3 meas = toGtsamPose3_(*T_Bkm1_Bk_meas);
+    double sigma_scale = 1.0;
+    bool skip_between = false;
+    double interval_quality = 1.0;
+    if (cfg_.use_interval_health_for_vo_between)
+    {
+      interval_quality = computeVoBetweenIntervalQuality_(kf.interval_health, cfg_);
+      sigma_scale = 1.0 + (1.0 - interval_quality) * std::max(0.0, cfg_.between_health_max_sigma_scale - 1.0);
+      skip_between = shouldSkipVoBetweenInterval_(kf.interval_health, cfg_, interval_quality);
+    }
 
-    const gtsam::Vector6 sigmas = (gtsam::Vector6() << cfg_.between_rot_sigma_rad, cfg_.between_rot_sigma_rad, cfg_.between_rot_sigma_rad,
-                                   cfg_.between_trans_sigma_m, cfg_.between_trans_sigma_m, cfg_.between_trans_sigma_m)
-                                      .finished();
-    auto betweenNoise = maybeHuberize_(
-        gtsam::noiseModel::Diagonal::Sigmas(sigmas),
-        cfg_.between_huber_k);
+    if (!skip_between)
+    {
+      const gtsam::Vector6 sigmas =
+          (gtsam::Vector6() << cfg_.between_rot_sigma_rad * sigma_scale, cfg_.between_rot_sigma_rad * sigma_scale, cfg_.between_rot_sigma_rad * sigma_scale,
+           cfg_.between_trans_sigma_m * sigma_scale, cfg_.between_trans_sigma_m * sigma_scale, cfg_.between_trans_sigma_m * sigma_scale)
+              .finished();
+      auto betweenNoise = maybeHuberize_(
+          gtsam::noiseModel::Diagonal::Sigmas(sigmas),
+          cfg_.between_huber_k);
 
-    newFactors.add(gtsam::BetweenFactor<gtsam::Pose3>(xkm1, xk, meas, betweenNoise));
-    between_added = 1;
+      newFactors.add(gtsam::BetweenFactor<gtsam::Pose3>(xkm1, xk, meas, betweenNoise));
+      between_added = 1;
+    }
+
+    if (cfg_.use_interval_health_for_vo_between && (skip_between || sigma_scale > 1.01))
+    {
+      std::cout << "[Optimizer] kf_id=" << kf.kf_id
+                << " vo_between_quality=" << interval_quality
+                << " sigma_scale=" << sigma_scale
+                << " skip_between=" << (skip_between ? 1 : 0)
+                << " frames=" << kf.interval_health.num_frames
+                << " pose_valid=" << kf.interval_health.num_pose_valid_frames
+                << " degraded=" << kf.interval_health.num_degraded_frames
+                << " lost=" << kf.interval_health.num_lost_frames
+                << "\n";
+    }
   }
 
   // IMU factor between last and current keyframe (after first)

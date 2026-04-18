@@ -102,6 +102,14 @@ visual_inertial_optimization:
     between_rot_sigma_rad: 0.3
     between_trans_sigma_m: 0.3
     between_huber_k: 1.345
+    use_interval_health_for_vo_between: true
+    between_health_min_pose_valid_fraction: 0.6
+    between_health_min_track_retention: 0.6
+    between_health_min_pnp_inlier_ratio: 0.25
+    between_health_min_track_coverage: 0.2
+    between_health_max_pnp_reproj_rmse_px: 3.0
+    between_health_max_sigma_scale: 5.0
+    between_health_skip_quality: 0.05
     use_imu: true
 
     init_landmarks_from_stereo: true

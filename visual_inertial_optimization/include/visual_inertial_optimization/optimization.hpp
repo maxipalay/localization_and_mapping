@@ -251,6 +251,14 @@ struct OptimizationConfig
     double between_rot_sigma_rad = 3.0 * M_PI / 180.0;
     double between_trans_sigma_m = 0.10;
     double between_huber_k = 1.345;
+    bool use_interval_health_for_vo_between = true;
+    double between_health_min_pose_valid_fraction = 0.6;
+    double between_health_min_track_retention = 0.6;
+    double between_health_min_pnp_inlier_ratio = 0.25;
+    double between_health_min_track_coverage = 0.2;
+    double between_health_max_pnp_reproj_rmse_px = 3.0;
+    double between_health_max_sigma_scale = 5.0;
+    double between_health_skip_quality = 0.05;
 
     bool use_imu = true;
 
