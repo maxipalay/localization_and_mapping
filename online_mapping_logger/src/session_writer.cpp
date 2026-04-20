@@ -39,6 +39,36 @@ void writePoseYaml(std::ostream &os, const std::string &key, const geometry_msgs
      << pose.orientation.w << "]\n";
 }
 
+void writeVector3Yaml(
+  std::ostream &os,
+  const std::string &key,
+  const geometry_msgs::msg::Vector3 &vector)
+{
+  os << key << ": ["
+     << vector.x << ", "
+     << vector.y << ", "
+     << vector.z << "]\n";
+}
+
+void writeIntervalHealthYaml(
+  std::ostream &os,
+  const visual_inertial::msg::FrontendIntervalHealth &health)
+{
+  os << "interval_health:\n";
+  os << "  num_frames: " << health.num_frames << "\n";
+  os << "  num_pose_valid_frames: " << health.num_pose_valid_frames << "\n";
+  os << "  num_degraded_frames: " << health.num_degraded_frames << "\n";
+  os << "  num_lost_frames: " << health.num_lost_frames << "\n";
+  os << "  min_tracks: " << health.min_tracks << "\n";
+  os << "  mean_tracks: " << health.mean_tracks << "\n";
+  os << "  min_track_retention: " << health.min_track_retention << "\n";
+  os << "  mean_track_retention: " << health.mean_track_retention << "\n";
+  os << "  mean_pnp_inlier_ratio: " << health.mean_pnp_inlier_ratio << "\n";
+  os << "  max_pnp_reproj_rmse_px: " << health.max_pnp_reproj_rmse_px << "\n";
+  os << "  min_track_coverage: " << health.min_track_coverage << "\n";
+  os << "  mean_track_coverage: " << health.mean_track_coverage << "\n";
+}
+
 std::string csvEscape(const std::string &value)
 {
   if (value.find_first_of(",\"\n") == std::string::npos) {
@@ -255,7 +285,7 @@ void SessionWriter::writeSessionMetadata_()
 
   os << "session_name: " << yamlDoubleQuoted(config_.session_name) << "\n";
   os << "created_at_utc: " << yamlDoubleQuoted(nowUtcString()) << "\n";
-  os << "dataset_version: 1\n";
+  os << "dataset_version: 3\n";
   os << "frames:\n";
   os << "  body: " << yamlDoubleQuoted(config_.body_frame_id) << "\n";
   os << "topics:\n";
@@ -352,17 +382,53 @@ std::filesystem::path SessionWriter::writeKeyframeMetadata_(
   if (pending.keyframe.has_vo_between != 0U) {
     writePoseYaml(os, "between_pose_prev_curr_body", pending.keyframe.between_pose_prev_curr);
   }
+  writeIntervalHealthYaml(os, pending.keyframe.interval_health);
   writePoseYaml(os, "optimized_pose_wb", pending.opt_result.pose_wb_opt);
+  writePoseYaml(os, "optimized_pose_wc", pending.opt_result.pose_wc_opt);
   os << "optimization:\n";
+  os << "  header_stamp_ns: " << stampToNs(pending.opt_result.header.stamp) << "\n";
+  os << "  header_frame_id: " << yamlDoubleQuoted(pending.opt_result.header.frame_id) << "\n";
   os << "  t_s: " << pending.opt_result.t_s << "\n";
-  os << "  accel_bias: ["
-     << pending.opt_result.accel_bias.x << ", "
-     << pending.opt_result.accel_bias.y << ", "
-     << pending.opt_result.accel_bias.z << "]\n";
-  os << "  gyro_bias: ["
-     << pending.opt_result.gyro_bias.x << ", "
-     << pending.opt_result.gyro_bias.y << ", "
-     << pending.opt_result.gyro_bias.z << "]\n";
+  os << "  has_velocity: " << (pending.opt_result.has_velocity ? "true" : "false") << "\n";
+  writeVector3Yaml(os, "  velocity_opt", pending.opt_result.velocity_opt);
+  writeVector3Yaml(os, "  accel_bias", pending.opt_result.accel_bias);
+  writeVector3Yaml(os, "  gyro_bias", pending.opt_result.gyro_bias);
+  os << "  stats:\n";
+  os << "    num_keyframes_in_window: " << pending.opt_result.stats.num_keyframes_in_window << "\n";
+  os << "    num_landmarks_alive: " << pending.opt_result.stats.num_landmarks_alive << "\n";
+  os << "    num_landmarks_created: " << pending.opt_result.stats.num_landmarks_created << "\n";
+  os << "    num_stereo_factors_added: " << pending.opt_result.stats.num_stereo_factors_added << "\n";
+  os << "    num_imu_factors_added: " << pending.opt_result.stats.num_imu_factors_added << "\n";
+  os << "    num_between_factors_added: " << pending.opt_result.stats.num_between_factors_added << "\n";
+  os << "    num_prior_factors_added: " << pending.opt_result.stats.num_prior_factors_added << "\n";
+  os << "    had_vo_between_measurement: "
+     << (pending.opt_result.stats.had_vo_between_measurement ? "true" : "false") << "\n";
+  os << "    used_vo_between_factor: "
+     << (pending.opt_result.stats.used_vo_between_factor ? "true" : "false") << "\n";
+  os << "    skipped_vo_between_factor: "
+     << (pending.opt_result.stats.skipped_vo_between_factor ? "true" : "false") << "\n";
+  os << "    vo_between_quality: " << pending.opt_result.stats.vo_between_quality << "\n";
+  os << "    vo_between_sigma_scale: " << pending.opt_result.stats.vo_between_sigma_scale << "\n";
+  os << "    imu_only_update: " << (pending.opt_result.stats.imu_only_update ? "true" : "false") << "\n";
+  os << "    update_iterations: " << pending.opt_result.stats.update_iterations << "\n";
+  os << "    update_intermediate_steps: " << pending.opt_result.stats.update_intermediate_steps << "\n";
+  os << "    update_nonlinear_variables: " << pending.opt_result.stats.update_nonlinear_variables << "\n";
+  os << "    update_linear_variables: " << pending.opt_result.stats.update_linear_variables << "\n";
+  os << "    final_error: " << pending.opt_result.stats.final_error << "\n";
+  os << "    has_error_before: " << (pending.opt_result.stats.has_error_before ? "true" : "false") << "\n";
+  os << "    error_before: " << pending.opt_result.stats.error_before << "\n";
+  os << "    has_error_after: " << (pending.opt_result.stats.has_error_after ? "true" : "false") << "\n";
+  os << "    error_after: " << pending.opt_result.stats.error_after << "\n";
+  os << "    variables_relinearized: " << pending.opt_result.stats.variables_relinearized << "\n";
+  os << "    variables_reeliminated: " << pending.opt_result.stats.variables_reeliminated << "\n";
+  os << "    factors_recalculated: " << pending.opt_result.stats.factors_recalculated << "\n";
+  os << "    cliques: " << pending.opt_result.stats.cliques << "\n";
+  os << "  has_pose_wb_covariance: " << (pending.opt_result.has_pose_wb_covariance ? "true" : "false") << "\n";
+  writeScalarArray(os, "  pose_wb_covariance", pending.opt_result.pose_wb_covariance);
+  os << "  has_velocity_covariance: " << (pending.opt_result.has_velocity_covariance ? "true" : "false") << "\n";
+  writeScalarArray(os, "  velocity_covariance", pending.opt_result.velocity_covariance);
+  os << "  has_bias_covariance: " << (pending.opt_result.has_bias_covariance ? "true" : "false") << "\n";
+  writeScalarArray(os, "  bias_covariance", pending.opt_result.bias_covariance);
 
   os << "associated_files:\n";
   os << "  rgb_path: " << yamlDoubleQuoted(relativeTo(rgb_path, session_dir_).generic_string()) << "\n";
