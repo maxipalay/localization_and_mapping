@@ -520,21 +520,22 @@ std::optional<OptimizationResult> Optimizer::push(
 
   // Optional VO BetweenFactor on BODY poses
   int between_added = 0;
+  bool had_vo_between_measurement = initialized_ && T_Bkm1_Bk_meas.has_value();
+  bool skipped_between = false;
+  double interval_quality = 1.0;
+  double sigma_scale = 1.0;
   if (cfg_.use_vo_between && initialized_ && T_Bkm1_Bk_meas.has_value())
   {
     const gtsam::Key xkm1 = X_(last_kf_id_);
     const gtsam::Pose3 meas = toGtsamPose3_(*T_Bkm1_Bk_meas);
-    double sigma_scale = 1.0;
-    bool skip_between = false;
-    double interval_quality = 1.0;
     if (cfg_.use_interval_health_for_vo_between)
     {
       interval_quality = computeVoBetweenIntervalQuality_(kf.interval_health, cfg_);
       sigma_scale = 1.0 + (1.0 - interval_quality) * std::max(0.0, cfg_.between_health_max_sigma_scale - 1.0);
-      skip_between = shouldSkipVoBetweenInterval_(kf.interval_health, cfg_, interval_quality);
+      skipped_between = shouldSkipVoBetweenInterval_(kf.interval_health, cfg_, interval_quality);
     }
 
-    if (!skip_between)
+    if (!skipped_between)
     {
       const gtsam::Vector6 sigmas =
           (gtsam::Vector6() << cfg_.between_rot_sigma_rad * sigma_scale, cfg_.between_rot_sigma_rad * sigma_scale, cfg_.between_rot_sigma_rad * sigma_scale,
@@ -548,12 +549,12 @@ std::optional<OptimizationResult> Optimizer::push(
       between_added = 1;
     }
 
-    if (cfg_.use_interval_health_for_vo_between && (skip_between || sigma_scale > 1.01))
+    if (cfg_.use_interval_health_for_vo_between && (skipped_between || sigma_scale > 1.01))
     {
       std::cout << "[Optimizer] kf_id=" << kf.kf_id
                 << " vo_between_quality=" << interval_quality
                 << " sigma_scale=" << sigma_scale
-                << " skip_between=" << (skip_between ? 1 : 0)
+                << " skip_between=" << (skipped_between ? 1 : 0)
                 << " frames=" << kf.interval_health.num_frames
                 << " pose_valid=" << kf.interval_health.num_pose_valid_frames
                 << " degraded=" << kf.interval_health.num_degraded_frames
@@ -563,6 +564,7 @@ std::optional<OptimizationResult> Optimizer::push(
   }
 
   // IMU factor between last and current keyframe (after first)
+  int imu_factors_added = 0;
   if (cfg_.use_imu && initialized_)
   {
     gtsam::PreintegratedCombinedMeasurements pim;
@@ -578,6 +580,7 @@ std::optional<OptimizationResult> Optimizer::push(
         xk, V_(kf.kf_id),
         B_(km1), B_(kf.kf_id),
         pim));
+    imu_factors_added = 1;
   }
 
   auto stereoNoise = maybeHuberize_(
@@ -755,8 +758,18 @@ std::optional<OptimizationResult> Optimizer::push(
   out.stats.num_landmarks_alive = static_cast<int>(landmark_last_seen_kf_.size());
   out.stats.num_landmarks_created = landmarks_created;
   out.stats.num_stereo_factors_added = stereo_factors_added;
+  out.stats.num_imu_factors_added = imu_factors_added;
   out.stats.num_between_factors_added = between_added;
   out.stats.num_prior_factors_added = prior_added;
+  out.stats.had_vo_between_measurement = had_vo_between_measurement;
+  out.stats.used_vo_between_factor = between_added > 0;
+  out.stats.skipped_vo_between_factor = had_vo_between_measurement && skipped_between;
+  out.stats.vo_between_quality = interval_quality;
+  out.stats.vo_between_sigma_scale = sigma_scale;
+  out.stats.imu_only_update =
+      (imu_factors_added > 0) &&
+      (stereo_factors_added == 0) &&
+      (between_added == 0);
   out.stats.update_iterations = static_cast<int>(update_result.iterations);
   out.stats.update_intermediate_steps = static_cast<int>(update_result.intermediateSteps);
   out.stats.update_nonlinear_variables = static_cast<int>(update_result.nonlinearVariables);

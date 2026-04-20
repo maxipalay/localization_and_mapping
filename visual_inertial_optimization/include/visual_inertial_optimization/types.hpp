@@ -15,8 +15,17 @@ struct OptimizationStats {
   int num_landmarks_created = 0;
 
   int num_stereo_factors_added = 0;
+  int num_imu_factors_added = 0;
   int num_between_factors_added = 0;
   int num_prior_factors_added = 0;
+
+  bool had_vo_between_measurement = false;
+  bool used_vo_between_factor = false;
+  bool skipped_vo_between_factor = false;
+  double vo_between_quality = 1.0;
+  double vo_between_sigma_scale = 1.0;
+
+  bool imu_only_update = false;
 
   int update_iterations = 0;
   int update_intermediate_steps = 0;

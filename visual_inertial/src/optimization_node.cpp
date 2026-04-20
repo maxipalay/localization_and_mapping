@@ -602,12 +602,22 @@ private:
 
             RCLCPP_INFO(
                 get_logger(),
-                "Optimization update kf_id=%lu took %.1f ms (window=%d stereo_factors=%d between_factors=%d)",
+                "Optimization update kf_id=%lu took %.1f ms "
+                "(window=%d stereo=%d imu=%d between=%d prior=%d "
+                "vo_meas=%d vo_used=%d vo_skip=%d vo_q=%.3f vo_sigma=%.3f imu_only=%d)",
                 static_cast<unsigned long>(res->kf_id),
                 optimize_ms,
                 res->stats.num_keyframes_in_window,
                 res->stats.num_stereo_factors_added,
-                res->stats.num_between_factors_added);
+                res->stats.num_imu_factors_added,
+                res->stats.num_between_factors_added,
+                res->stats.num_prior_factors_added,
+                res->stats.had_vo_between_measurement ? 1 : 0,
+                res->stats.used_vo_between_factor ? 1 : 0,
+                res->stats.skipped_vo_between_factor ? 1 : 0,
+                res->stats.vo_between_quality,
+                res->stats.vo_between_sigma_scale,
+                res->stats.imu_only_update ? 1 : 0);
 
             // ---- Update persistent landmark cache ----
             {
@@ -643,8 +653,15 @@ private:
             opt_msg.stats.num_landmarks_alive = res->stats.num_landmarks_alive;
             opt_msg.stats.num_landmarks_created = res->stats.num_landmarks_created;
             opt_msg.stats.num_stereo_factors_added = res->stats.num_stereo_factors_added;
+            opt_msg.stats.num_imu_factors_added = res->stats.num_imu_factors_added;
             opt_msg.stats.num_between_factors_added = res->stats.num_between_factors_added;
             opt_msg.stats.num_prior_factors_added = res->stats.num_prior_factors_added;
+            opt_msg.stats.had_vo_between_measurement = res->stats.had_vo_between_measurement;
+            opt_msg.stats.used_vo_between_factor = res->stats.used_vo_between_factor;
+            opt_msg.stats.skipped_vo_between_factor = res->stats.skipped_vo_between_factor;
+            opt_msg.stats.vo_between_quality = res->stats.vo_between_quality;
+            opt_msg.stats.vo_between_sigma_scale = res->stats.vo_between_sigma_scale;
+            opt_msg.stats.imu_only_update = res->stats.imu_only_update;
             opt_msg.stats.update_iterations = res->stats.update_iterations;
             opt_msg.stats.update_intermediate_steps = res->stats.update_intermediate_steps;
             opt_msg.stats.update_nonlinear_variables = res->stats.update_nonlinear_variables;

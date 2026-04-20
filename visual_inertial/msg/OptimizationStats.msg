@@ -3,8 +3,17 @@ int32 num_keyframes_in_window
 int32 num_landmarks_alive
 int32 num_landmarks_created
 int32 num_stereo_factors_added
+int32 num_imu_factors_added
 int32 num_between_factors_added
 int32 num_prior_factors_added
+
+bool had_vo_between_measurement
+bool used_vo_between_factor
+bool skipped_vo_between_factor
+float64 vo_between_quality
+float64 vo_between_sigma_scale
+
+bool imu_only_update
 
 int32 update_iterations
 int32 update_intermediate_steps
