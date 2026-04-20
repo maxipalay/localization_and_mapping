@@ -582,9 +582,30 @@ private:
             if (!opt)
                 continue;
 
+            const bool malformed_track_payload =
+                (msg.u_l.size() != msg.track_ids.size()) ||
+                (msg.v_l.size() != msg.track_ids.size()) ||
+                (msg.u_r.size() != msg.track_ids.size()) ||
+                (msg.v_r.size() != msg.track_ids.size()) ||
+                (msg.has_right.size() != msg.track_ids.size());
+
+            if (malformed_track_payload)
+            {
+                RCLCPP_WARN(
+                    get_logger(),
+                    "Malformed keyframe payload kf_id=%lu: track_ids=%zu u_l=%zu v_l=%zu u_r=%zu v_r=%zu has_right=%zu has_imu=%d pim_bytes=%zu",
+                    static_cast<unsigned long>(msg.kf_id),
+                    msg.track_ids.size(),
+                    msg.u_l.size(),
+                    msg.v_l.size(),
+                    msg.u_r.size(),
+                    msg.v_r.size(),
+                    msg.has_right.size(),
+                    static_cast<int>(msg.has_imu),
+                    msg.pim_bytes.size());
+            }
+
             const auto ev = toKeyframeEvent(msg);
-            if (ev.ids.empty())
-                continue;
 
             std::optional<Eigen::Isometry3d> between_meas = std::nullopt;
             if (ev.has_vo_between)
