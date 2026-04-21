@@ -3,6 +3,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <array>
 #include <fstream>
 #include <map>
 #include <optional>
@@ -175,6 +176,20 @@ std::string nodeStringOr(const YAML::Node &node, const std::string &key, const s
   return value ? value.as<std::string>() : fallback;
 }
 
+template <typename T, size_t N>
+std::array<T, N> nodeFixedArrayOr(const YAML::Node &node, const std::string &key)
+{
+  std::array<T, N> out{};
+  const auto value = node[key];
+  if (!value || !value.IsSequence() || value.size() != N) {
+    return out;
+  }
+  for (size_t i = 0; i < N; ++i) {
+    out[i] = value[i].as<T>();
+  }
+  return out;
+}
+
 double nodeDoubleOr(const YAML::Node &node, const std::string &key, double fallback)
 {
   const auto value = node[key];
@@ -314,6 +329,7 @@ void loadManifest(SessionData &session)
       resolveRelativePath(session.session_dir, optionalField(row, "keyframe_meta_path"));
     record.frontend_pose_wc = poseFromManifest(row, "frontend_");
     record.initial_pose_wb = poseFromManifestAliases(row, {"opt_body_", "opt_"});
+    record.optimized_pose_wb = record.initial_pose_wb;
     session.keyframes.push_back(std::move(record));
   }
 
@@ -337,17 +353,46 @@ void loadKeyframeMetadata(SessionData &session)
 
     const YAML::Node root = YAML::LoadFile(keyframe.keyframe_meta_path.string());
     const bool has_vo_between = nodeBoolOr(root, "has_vo_between", false);
-    if (!has_vo_between) {
-      continue;
+
+    if (const YAML::Node optimized_pose_wb = root["optimized_pose_wb"]) {
+      keyframe.optimized_pose_wb = poseFromYamlNode(optimized_pose_wb);
     }
 
-    YAML::Node between_node = root["between_pose_prev_curr_body"];
-    if (!between_node) {
-      between_node = root["between_pose_prev_curr"];
+    if (has_vo_between) {
+      YAML::Node between_node = root["between_pose_prev_curr_body"];
+      if (!between_node) {
+        between_node = root["between_pose_prev_curr"];
+      }
+      if (between_node) {
+        keyframe.between_pose_prev_curr_body = poseFromYamlNode(between_node);
+      }
     }
-    if (!between_node) {
-    } else {
-      keyframe.between_pose_prev_curr_body = poseFromYamlNode(between_node);
+
+    if (const YAML::Node interval_health = root["interval_health"]) {
+      keyframe.interval_health.num_frames = interval_health["num_frames"] ? interval_health["num_frames"].as<uint32_t>() : 0;
+      keyframe.interval_health.num_pose_valid_frames =
+        interval_health["num_pose_valid_frames"] ? interval_health["num_pose_valid_frames"].as<uint32_t>() : 0;
+      keyframe.interval_health.num_degraded_frames =
+        interval_health["num_degraded_frames"] ? interval_health["num_degraded_frames"].as<uint32_t>() : 0;
+      keyframe.interval_health.num_lost_frames =
+        interval_health["num_lost_frames"] ? interval_health["num_lost_frames"].as<uint32_t>() : 0;
+      keyframe.interval_health.min_tracks = interval_health["min_tracks"] ? interval_health["min_tracks"].as<int32_t>() : 0;
+      keyframe.interval_health.mean_tracks = nodeDoubleOr(interval_health, "mean_tracks", 0.0);
+      keyframe.interval_health.min_track_retention = nodeDoubleOr(interval_health, "min_track_retention", 1.0);
+      keyframe.interval_health.mean_track_retention = nodeDoubleOr(interval_health, "mean_track_retention", 1.0);
+      keyframe.interval_health.mean_pnp_inlier_ratio = nodeDoubleOr(interval_health, "mean_pnp_inlier_ratio", 1.0);
+      keyframe.interval_health.max_pnp_reproj_rmse_px = nodeDoubleOr(interval_health, "max_pnp_reproj_rmse_px", 0.0);
+      keyframe.interval_health.min_track_coverage = nodeDoubleOr(interval_health, "min_track_coverage", 1.0);
+      keyframe.interval_health.mean_track_coverage = nodeDoubleOr(interval_health, "mean_track_coverage", 1.0);
+    }
+
+    if (const YAML::Node optimization = root["optimization"]) {
+      const bool has_pose_wb_covariance = nodeBoolOr(optimization, "has_pose_wb_covariance", false);
+      const auto pose_wb_covariance = nodeFixedArrayOr<double, 36>(optimization, "pose_wb_covariance");
+      if (has_pose_wb_covariance) {
+        keyframe.has_pose_wb_covariance = true;
+        keyframe.pose_wb_covariance = pose_wb_covariance;
+      }
     }
 
     const auto tracks = root["tracks"];
@@ -400,58 +445,6 @@ void loadSessionMetadata(SessionData &session)
   const YAML::Node frames = root["frames"];
   if (frames && frames["body"]) {
     session.body_frame_id = frames["body"].as<std::string>();
-  }
-}
-
-void loadTagPriors(SessionData &session)
-{
-  const auto priors_path = session.session_dir / "tag_priors.yaml";
-  if (!std::filesystem::exists(priors_path)) {
-    return;
-  }
-
-  std::ifstream is(priors_path);
-  if (!is.is_open()) {
-    throw std::runtime_error("failed to open tag priors file: " + priors_path.string());
-  }
-
-  std::stringstream buffer;
-  buffer << is.rdbuf();
-  const std::string contents = trim(buffer.str());
-  if (contents.empty() || contents[0] == '#') {
-    return;
-  }
-
-  const YAML::Node root = YAML::Load(contents);
-  YAML::Node sequence = root["tags"] ? root["tags"] : root["priors"];
-  if (!sequence && root.IsSequence()) {
-    sequence = root;
-  }
-  if (!sequence || !sequence.IsSequence()) {
-    throw std::runtime_error("tag_priors.yaml must contain a sequence under 'tags' or 'priors'");
-  }
-
-  for (const auto &entry : sequence) {
-    if (!entry["id"] && !entry["tag_id"]) {
-      throw std::runtime_error("every tag prior entry must contain 'id' or 'tag_id'");
-    }
-
-    TagPrior prior;
-    prior.tag_id = entry["id"] ? entry["id"].as<int>() : entry["tag_id"].as<int>();
-    const YAML::Node pose_node = entry["pose"] ? entry["pose"] : entry;
-    prior.world_T_tag = poseFromYamlNode(pose_node);
-    const bool has_translation_sigma = entry["translation_sigma_m"] || entry["sigma_translation_m"];
-    const bool has_rotation_sigma = entry["rotation_sigma_rad"] || entry["sigma_rotation_rad"];
-    prior.translation_sigma_m = nodeDoubleOr(
-      entry, "translation_sigma_m",
-      nodeDoubleOr(entry, "sigma_translation_m", prior.translation_sigma_m));
-    prior.rotation_sigma_rad = nodeDoubleOr(
-      entry, "rotation_sigma_rad",
-      nodeDoubleOr(entry, "sigma_rotation_rad", prior.rotation_sigma_rad));
-    prior.has_custom_sigmas = has_translation_sigma || has_rotation_sigma;
-    prior.anchor = nodeBoolOr(entry, "anchor", nodeBoolOr(entry, "is_anchor", false));
-    prior.source_name = nodeStringOr(entry, "name", "tag_" + std::to_string(prior.tag_id));
-    session.tag_priors.push_back(std::move(prior));
   }
 }
 
@@ -520,7 +513,6 @@ SessionData loadSession(const std::filesystem::path &session_dir)
   loadCameraCalibration(session);
   loadManifest(session);
   loadKeyframeMetadata(session);
-  loadTagPriors(session);
   loadTagObservations(session);
 
   if (session.keyframes.empty()) {

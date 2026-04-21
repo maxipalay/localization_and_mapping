@@ -22,7 +22,6 @@ namespace
 struct DebugCliConfig
 {
   std::filesystem::path session_dir;
-  offline_global_graph::OptimizerConfig optimizer_config;
   std::optional<uint64_t> kf_id;
   std::optional<int> tag_id;
   std::filesystem::path csv_output_path;
@@ -54,12 +53,7 @@ void printUsage()
     << "       [--kf-id INTEGER] [--tag-id INTEGER] [--max-rows INTEGER]\n"
     << "       [--only-tag-id INTEGER] [--exclude-tag-id INTEGER]\n"
     << "       [--csv-output PATH]\n"
-    << "       [--sort ascending|descending]\n"
-    << "       [--between-translation-sigma FLOAT] [--between-rotation-sigma FLOAT]\n"
-    << "       [--tag-translation-sigma FLOAT] [--tag-rotation-sigma FLOAT]\n"
-    << "       [--soft-prior-translation-sigma FLOAT] [--soft-prior-rotation-sigma FLOAT]\n"
-    << "       [--anchor-translation-sigma FLOAT] [--anchor-rotation-sigma FLOAT]\n"
-    << "       [--robust-huber-k FLOAT]\n";
+    << "       [--sort ascending|descending]\n";
 }
 
 std::string requireValue(int argc, char **argv, int &index, const char *flag)
@@ -69,15 +63,6 @@ std::string requireValue(int argc, char **argv, int &index, const char *flag)
   }
   ++index;
   return argv[index];
-}
-
-double parseCliDouble(const std::string &value, const char *flag)
-{
-  try {
-    return std::stod(value);
-  } catch (const std::exception &) {
-    throw std::runtime_error(std::string("failed to parse numeric value for ") + flag);
-  }
 }
 
 uint64_t parseCliUint64(const std::string &value, const char *flag)
@@ -141,17 +126,10 @@ offline_global_graph::SessionData filterSessionByTags(
 
   offline_global_graph::SessionData filtered = session;
   filtered.tag_observations.clear();
-  filtered.tag_priors.clear();
 
   for (const auto &observation : session.tag_observations) {
     if (tagAllowed(observation.tag_id, only_tag_ids, exclude_tag_ids)) {
       filtered.tag_observations.push_back(observation);
-    }
-  }
-
-  for (const auto &prior : session.tag_priors) {
-    if (tagAllowed(prior.tag_id, only_tag_ids, exclude_tag_ids)) {
-      filtered.tag_priors.push_back(prior);
     }
   }
 
@@ -238,33 +216,6 @@ DebugCliConfig parseArgs(int argc, char **argv)
       } else {
         throw std::runtime_error("invalid value for --sort: " + value);
       }
-    } else if (arg == "--between-translation-sigma") {
-      cfg.optimizer_config.between_translation_sigma_m =
-        parseCliDouble(requireValue(argc, argv, i, "--between-translation-sigma"), "--between-translation-sigma");
-    } else if (arg == "--between-rotation-sigma") {
-      cfg.optimizer_config.between_rotation_sigma_rad =
-        parseCliDouble(requireValue(argc, argv, i, "--between-rotation-sigma"), "--between-rotation-sigma");
-    } else if (arg == "--tag-translation-sigma") {
-      cfg.optimizer_config.tag_translation_sigma_m =
-        parseCliDouble(requireValue(argc, argv, i, "--tag-translation-sigma"), "--tag-translation-sigma");
-    } else if (arg == "--tag-rotation-sigma") {
-      cfg.optimizer_config.tag_rotation_sigma_rad =
-        parseCliDouble(requireValue(argc, argv, i, "--tag-rotation-sigma"), "--tag-rotation-sigma");
-    } else if (arg == "--soft-prior-translation-sigma") {
-      cfg.optimizer_config.soft_prior_translation_sigma_m =
-        parseCliDouble(requireValue(argc, argv, i, "--soft-prior-translation-sigma"), "--soft-prior-translation-sigma");
-    } else if (arg == "--soft-prior-rotation-sigma") {
-      cfg.optimizer_config.soft_prior_rotation_sigma_rad =
-        parseCliDouble(requireValue(argc, argv, i, "--soft-prior-rotation-sigma"), "--soft-prior-rotation-sigma");
-    } else if (arg == "--anchor-translation-sigma") {
-      cfg.optimizer_config.anchor_translation_sigma_m =
-        parseCliDouble(requireValue(argc, argv, i, "--anchor-translation-sigma"), "--anchor-translation-sigma");
-    } else if (arg == "--anchor-rotation-sigma") {
-      cfg.optimizer_config.anchor_rotation_sigma_rad =
-        parseCliDouble(requireValue(argc, argv, i, "--anchor-rotation-sigma"), "--anchor-rotation-sigma");
-    } else if (arg == "--robust-huber-k") {
-      cfg.optimizer_config.robust_huber_k =
-        parseCliDouble(requireValue(argc, argv, i, "--robust-huber-k"), "--robust-huber-k");
     } else if (arg == "--help" || arg == "-h") {
       printUsage();
       std::exit(0);
@@ -289,7 +240,8 @@ int main(int argc, char **argv)
 
     auto session = offline_global_graph::loadSession(cfg.session_dir);
     session = filterSessionByTags(session, cfg.only_tag_ids, cfg.exclude_tag_ids);
-    const auto result = offline_global_graph::optimizeSession(session, cfg.optimizer_config);
+    const auto result = offline_global_graph::optimizeSession(
+      session, offline_global_graph::OptimizerConfig{});
 
     std::unordered_map<uint64_t, gtsam::Pose3> world_T_body_by_kf;
     for (const auto &entry : result.optimized_keyframes) {

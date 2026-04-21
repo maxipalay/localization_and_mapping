@@ -11,7 +11,9 @@
 #include <gtsam/linear/NoiseModel.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -52,43 +54,144 @@ gtsam::SharedNoiseModel robustPoseNoise(
   double rotation_sigma_rad,
   double huber_k)
 {
+  const auto base_noise = poseNoise(translation_sigma_m, rotation_sigma_rad);
   if (huber_k <= 0.0) {
-    return poseNoise(translation_sigma_m, rotation_sigma_rad);
+    return base_noise;
   }
   return gtsam::noiseModel::Robust::Create(
     gtsam::noiseModel::mEstimator::Huber::Create(huber_k),
-    poseNoise(translation_sigma_m, rotation_sigma_rad));
+    base_noise);
 }
 
-const TagPrior *findPrior(const std::vector<TagPrior> &priors, int tag_id)
+gtsam::SharedNoiseModel maybeHuberize(
+  const gtsam::SharedNoiseModel &base_noise,
+  double huber_k)
 {
-  for (const auto &prior : priors) {
-    if (prior.tag_id == tag_id) {
-      return &prior;
+  if (huber_k <= 0.0) {
+    return base_noise;
+  }
+  return gtsam::noiseModel::Robust::Create(
+    gtsam::noiseModel::mEstimator::Huber::Create(huber_k),
+    base_noise);
+}
+
+double clamp01(double x)
+{
+  return std::clamp(x, 0.0, 1.0);
+}
+
+double normalizedFloorScore(double value, double min_acceptable)
+{
+  if (min_acceptable <= 0.0) {
+    return 1.0;
+  }
+  return clamp01(value / min_acceptable);
+}
+
+double normalizedCeilingScore(double value, double max_acceptable)
+{
+  if (value < 0.0 || max_acceptable <= 0.0) {
+    return 1.0;
+  }
+  return clamp01(max_acceptable / std::max(value, 1e-9));
+}
+
+double betweenIntervalQuality(
+  const KeyframeRecord::IntervalHealth &health,
+  const OptimizerConfig &config)
+{
+  if (health.num_frames == 0) {
+    return 1.0;
+  }
+
+  const double num_frames = static_cast<double>(health.num_frames);
+  const double pose_valid_fraction =
+    static_cast<double>(health.num_pose_valid_frames) / num_frames;
+  const double degraded_fraction =
+    static_cast<double>(health.num_degraded_frames) / num_frames;
+  const double lost_fraction =
+    static_cast<double>(health.num_lost_frames) / num_frames;
+
+  const double pose_valid_score = normalizedFloorScore(
+    pose_valid_fraction, config.between_health_min_pose_valid_fraction);
+  const double retention_score = normalizedFloorScore(
+    health.min_track_retention, config.between_health_min_track_retention);
+  const double pnp_score = normalizedFloorScore(
+    health.mean_pnp_inlier_ratio, config.between_health_min_pnp_inlier_ratio);
+  const double coverage_score = normalizedFloorScore(
+    health.min_track_coverage, config.between_health_min_track_coverage);
+  const double rmse_score = normalizedCeilingScore(
+    health.max_pnp_reproj_rmse_px, config.between_health_max_pnp_reproj_rmse_px);
+  const double state_score = clamp01(1.0 - std::max(degraded_fraction, lost_fraction));
+
+  return std::min({
+    pose_valid_score,
+    retention_score,
+    pnp_score,
+    coverage_score,
+    rmse_score,
+    state_score});
+}
+
+bool shouldSkipBetweenInterval(
+  const KeyframeRecord::IntervalHealth &health,
+  const OptimizerConfig &config,
+  double quality)
+{
+  if (health.num_frames == 0) {
+    return false;
+  }
+
+  if (quality >= config.between_health_skip_quality) {
+    return false;
+  }
+
+  return health.num_pose_valid_frames == 0;
+}
+
+gtsam::SharedNoiseModel optimizerPosePriorNoise(
+  const KeyframeRecord &keyframe,
+  const OptimizerConfig &config)
+{
+  gtsam::Matrix66 covariance = gtsam::Matrix66::Zero();
+  for (size_t r = 0; r < 6; ++r) {
+    for (size_t c = 0; c < 6; ++c) {
+      covariance(static_cast<Eigen::Index>(r), static_cast<Eigen::Index>(c)) =
+        keyframe.pose_wb_covariance[r * 6 + c];
     }
   }
-  return nullptr;
-}
 
-double translationDistance(const gtsam::Pose3 &a, const gtsam::Pose3 &b)
-{
-  const gtsam::Point3 delta = a.translation() - b.translation();
-  return delta.norm();
-}
+  covariance = 0.5 * (covariance + covariance.transpose());
+  covariance *= std::max(1.0, config.optimizer_pose_prior_covariance_scale);
 
-const TagPrior *findAnchorPrior(const std::vector<TagPrior> &priors)
-{
-  if (priors.empty()) {
-    return nullptr;
+  const double min_rot_var =
+    config.optimizer_pose_prior_min_rotation_sigma_rad *
+    config.optimizer_pose_prior_min_rotation_sigma_rad;
+  const double min_trans_var =
+    config.optimizer_pose_prior_min_translation_sigma_m *
+    config.optimizer_pose_prior_min_translation_sigma_m;
+
+  for (size_t i = 0; i < 3; ++i) {
+    covariance(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(i)) =
+      std::max(covariance(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(i)), min_rot_var);
+  }
+  for (size_t i = 3; i < 6; ++i) {
+    covariance(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(i)) =
+      std::max(covariance(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(i)), min_trans_var);
   }
 
-  for (const auto &prior : priors) {
-    if (prior.anchor) {
-      return &prior;
+  for (size_t r = 0; r < 6; ++r) {
+    for (size_t c = 0; c < 6; ++c) {
+      const double value = covariance(static_cast<Eigen::Index>(r), static_cast<Eigen::Index>(c));
+      if (!std::isfinite(value)) {
+        throw std::runtime_error("optimizer pose covariance contains non-finite values");
+      }
     }
   }
 
-  return &priors.front();
+  return maybeHuberize(
+    gtsam::noiseModel::Gaussian::Covariance(covariance),
+    config.optimizer_pose_prior_huber_k);
 }
 
 gtsam::Pose3 betweenMeasurementForAdjacentKeyframes(
@@ -119,54 +222,52 @@ OptimizationResult optimizeSession(const SessionData &session, const OptimizerCo
     keyframe_initials.emplace(keyframe.kf_id, keyframe.initial_pose_wb);
   }
 
-  const TagPrior *anchor_prior = findAnchorPrior(session.tag_priors);
-  if (anchor_prior != nullptr) {
-    const TagObservation *seed_observation = nullptr;
-    size_t seed_index = 0;
-    for (size_t i = 0; i < session.keyframes.size() && seed_observation == nullptr; ++i) {
-      const auto &keyframe = session.keyframes[i];
-      for (const auto &observation : session.tag_observations) {
-        if (observation.kf_id == keyframe.kf_id && observation.tag_id == anchor_prior->tag_id) {
-          seed_observation = &observation;
-          seed_index = i;
-          break;
-        }
-      }
-    }
-
-    if (seed_observation != nullptr) {
-      keyframe_initials[seed_observation->kf_id] =
-        anchor_prior->world_T_tag.compose(seed_observation->body_T_tag.inverse());
-
-      for (size_t i = seed_index + 1; i < session.keyframes.size(); ++i) {
-        const auto &previous = session.keyframes[i - 1];
-        const auto &current = session.keyframes[i];
-        const gtsam::Pose3 measurement = betweenMeasurementForAdjacentKeyframes(previous, current);
-        keyframe_initials[current.kf_id] = keyframe_initials.at(previous.kf_id).compose(measurement);
-      }
-
-      for (size_t i = seed_index; i > 0; --i) {
-        const auto &previous = session.keyframes[i - 1];
-        const auto &current = session.keyframes[i];
-        const gtsam::Pose3 measurement = betweenMeasurementForAdjacentKeyframes(previous, current);
-        keyframe_initials[previous.kf_id] = keyframe_initials.at(current.kf_id).compose(measurement.inverse());
-      }
-    }
-  }
-
   for (const auto &keyframe : session.keyframes) {
     initial_values.insert(xKey(keyframe.kf_id), keyframe_initials.at(keyframe.kf_id));
   }
 
-  const auto between_noise = poseNoise(
-    config.between_translation_sigma_m, config.between_rotation_sigma_rad);
   for (size_t i = 1; i < session.keyframes.size(); ++i) {
     const auto &previous = session.keyframes[i - 1];
     const auto &current = session.keyframes[i];
     const gtsam::Pose3 measurement = betweenMeasurementForAdjacentKeyframes(previous, current);
+    double sigma_scale = 1.0;
+    bool skip_between = false;
+    if (config.use_interval_health_for_between) {
+      const double quality = betweenIntervalQuality(current.interval_health, config);
+      sigma_scale =
+        1.0 + (1.0 - quality) * std::max(0.0, config.between_health_max_sigma_scale - 1.0);
+      skip_between = shouldSkipBetweenInterval(current.interval_health, config, quality);
+      if (skip_between) {
+        ++result.between_factor_skipped_count;
+      } else if (sigma_scale > 1.01) {
+        ++result.between_factor_inflated_count;
+      }
+    }
+    if (skip_between) {
+      continue;
+    }
     graph.add(gtsam::BetweenFactor<gtsam::Pose3>(
-      xKey(previous.kf_id), xKey(current.kf_id), measurement, between_noise));
+      xKey(previous.kf_id),
+      xKey(current.kf_id),
+      measurement,
+      poseNoise(
+        config.between_translation_sigma_m * sigma_scale,
+        config.between_rotation_sigma_rad * sigma_scale)));
     ++result.between_factor_count;
+  }
+
+  if (config.use_optimizer_pose_priors) {
+    for (const auto &keyframe : session.keyframes) {
+      if (!keyframe.has_pose_wb_covariance) {
+        continue;
+      }
+      graph.add(gtsam::PriorFactor<gtsam::Pose3>(
+        xKey(keyframe.kf_id),
+        keyframe.optimized_pose_wb,
+        optimizerPosePriorNoise(keyframe, config)));
+      ++result.prior_factor_count;
+      ++result.optimizer_pose_prior_count;
+    }
   }
 
   for (const auto &observation : session.tag_observations) {
@@ -177,12 +278,7 @@ OptimizationResult optimizeSession(const SessionData &session, const OptimizerCo
 
     const gtsam::Key tag_key = tKey(observation.tag_id);
     if (!initial_values.exists(tag_key)) {
-      const TagPrior *prior = findPrior(session.tag_priors, observation.tag_id);
-      if (prior != nullptr) {
-        initial_values.insert(tag_key, prior->world_T_tag);
-      } else {
-        initial_values.insert(tag_key, keyframe_it->second.compose(observation.body_T_tag));
-      }
+      initial_values.insert(tag_key, keyframe_it->second.compose(observation.body_T_tag));
     }
 
     graph.add(gtsam::BetweenFactor<gtsam::Pose3>(
@@ -196,47 +292,15 @@ OptimizationResult optimizeSession(const SessionData &session, const OptimizerCo
     ++result.tag_observation_factor_count;
   }
 
-  bool anchor_assigned = false;
-  for (size_t i = 0; i < session.tag_priors.size(); ++i) {
-    const auto &prior = session.tag_priors[i];
-    const bool use_anchor_noise =
-      config.anchor_all_tag_priors || prior.anchor || (!anchor_assigned && i == 0);
-    const gtsam::Key tag_key = tKey(prior.tag_id);
-    if (!initial_values.exists(tag_key)) {
-      initial_values.insert(tag_key, prior.world_T_tag);
-    }
-
-    graph.add(gtsam::PriorFactor<gtsam::Pose3>(
-      tag_key,
-      prior.world_T_tag,
-      poseNoise(
-        use_anchor_noise ?
-          config.anchor_translation_sigma_m :
-          (prior.has_custom_sigmas ? prior.translation_sigma_m : config.soft_prior_translation_sigma_m),
-        use_anchor_noise ?
-          config.anchor_rotation_sigma_rad :
-          (prior.has_custom_sigmas ? prior.rotation_sigma_rad : config.soft_prior_rotation_sigma_rad))));
-    ++result.prior_factor_count;
-
-    if (use_anchor_noise && !anchor_assigned) {
-      anchor_assigned = true;
-      result.anchor_strategy = prior.anchor ?
-        ("tag_prior:" + std::to_string(prior.tag_id)) :
-        ("first_tag_prior_fallback:" + std::to_string(prior.tag_id));
-    }
-  }
-
-  if (!anchor_assigned) {
-    const auto &first_keyframe = session.keyframes.front();
-    graph.add(gtsam::PriorFactor<gtsam::Pose3>(
-      xKey(first_keyframe.kf_id),
-      first_keyframe.initial_pose_wb,
-      poseNoise(
-        config.anchor_translation_sigma_m,
-        config.anchor_rotation_sigma_rad)));
-    ++result.prior_factor_count;
-    result.anchor_strategy = "first_keyframe_fallback:" + std::to_string(first_keyframe.kf_id);
-  }
+  const auto &first_keyframe = session.keyframes.front();
+  graph.add(gtsam::PriorFactor<gtsam::Pose3>(
+    xKey(first_keyframe.kf_id),
+    first_keyframe.initial_pose_wb,
+    poseNoise(
+      config.anchor_translation_sigma_m,
+      config.anchor_rotation_sigma_rad)));
+  ++result.prior_factor_count;
+  result.anchor_strategy = "first_keyframe_fallback:" + std::to_string(first_keyframe.kf_id);
 
   if (config.use_visual_factors) {
     if (session.camera.fx <= 0.0 || session.camera.fy <= 0.0) {
@@ -344,12 +408,6 @@ OptimizationResult optimizeSession(const SessionData &session, const OptimizerCo
   }
 
   std::map<int, gtsam::Pose3> sorted_tags;
-  for (const auto &prior : session.tag_priors) {
-    const gtsam::Key tag_key = tKey(prior.tag_id);
-    if (optimized.exists(tag_key)) {
-      sorted_tags.emplace(prior.tag_id, optimized.at<gtsam::Pose3>(tag_key));
-    }
-  }
   for (const auto &observation : session.tag_observations) {
     const gtsam::Key tag_key = tKey(observation.tag_id);
     if (optimized.exists(tag_key)) {
@@ -358,25 +416,6 @@ OptimizationResult optimizeSession(const SessionData &session, const OptimizerCo
   }
   for (const auto &entry : sorted_tags) {
     result.optimized_tags.emplace_back(entry.first, entry.second);
-  }
-
-  if (config.enforce_max_tag_translation_deviation) {
-    for (const auto &prior : session.tag_priors) {
-      const gtsam::Key tag_key = tKey(prior.tag_id);
-      if (!optimized.exists(tag_key)) {
-        continue;
-      }
-
-      const double deviation_m =
-        translationDistance(optimized.at<gtsam::Pose3>(tag_key), prior.world_T_tag);
-      if (deviation_m > config.max_tag_translation_deviation_m) {
-        std::ostringstream oss;
-        oss << "optimized tag " << prior.tag_id
-            << " moved " << deviation_m << " m from its prior, exceeding the configured limit of "
-            << config.max_tag_translation_deviation_m << " m";
-        throw std::runtime_error(oss.str());
-      }
-    }
   }
 
   return result;

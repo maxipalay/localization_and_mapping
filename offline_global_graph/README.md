@@ -1,15 +1,31 @@
 # offline_global_graph
 
-Offline global graph builder and optimizer for sessions recorded by `online_mapping_logger`.
+Offline global graph refinement for sessions recorded by `online_mapping_logger`.
 
-## What v1 does
+## Default workflow
 
 - Loads a logged mapping session from disk
-- Initializes body poses from the logged optimized body poses
+- Initializes body poses from the logged online optimizer poses
 - Adds between factors between consecutive keyframes
-- Adds body-to-tag observation factors from logged tag TF
-- Adds one strong anchor prior and optional soft tag priors
+- Uses logged frontend interval-health to inflate or skip weak between factors
+- Adds body-to-tag observation factors from logged tag TF for loop closure
+- Adds pose priors from the logged online optimizer covariance
+- Anchors the graph with a prior on the first keyframe
 - Writes optimized keyframe poses, optimized tag poses, and an optimization summary
+
+This is the only supported path in the main CLI.
+
+The current default behavior is equivalent to the old explicit command:
+
+```bash
+./build/offline_global_graph/offline_global_graph_cli \
+  --session-dir /tmp/online_mapping_sessions/session_20260419_215555/ \
+  --use-optimizer-pose-priors \
+  --optimizer-pose-prior-covariance-scale 10.0 \
+  --anchor-translation-sigma 0.3 \
+  --anchor-rotation-sigma 0.5 \
+  --tag-observation-huber-k 1.345
+```
 
 ## Usage
 
@@ -17,20 +33,27 @@ Offline global graph builder and optimizer for sessions recorded by `online_mapp
 ros2 run offline_global_graph offline_global_graph_cli --session-dir /tmp/online_mapping_sessions/session_20260321_102832
 ```
 
-Optional flags:
+The main CLI is intentionally lightweight. The only supported options are:
 
+- `--session-dir PATH`
 - `--output-dir PATH`
-- `--only-tag-id INTEGER`
-- `--exclude-tag-id INTEGER`
-- `--between-translation-sigma FLOAT`
-- `--between-rotation-sigma FLOAT`
-- `--tag-translation-sigma FLOAT`
-- `--tag-rotation-sigma FLOAT`
-- `--soft-prior-translation-sigma FLOAT`
-- `--soft-prior-rotation-sigma FLOAT`
-- `--anchor-translation-sigma FLOAT`
-- `--anchor-rotation-sigma FLOAT`
-- `--robust-huber-k FLOAT`
+
+## What it does not do
+
+- It does not load or use `tag_priors.yaml`
+- It does not anchor on tags
+- It does not expose alternate main-CLI modes for tag-only optimization
+- It does not expose the old broad tuning surface in the main CLI
+
+## Session inputs used by the optimizer
+
+The refinement path consumes these logged fields when present:
+
+- `optimized_pose_wb`
+- `optimization.pose_wb_covariance`
+- `between_pose_prev_curr_body`
+- `interval_health`
+- tag observations logged as `body -> tag`
 
 ## Debugging observations
 
@@ -58,27 +81,6 @@ The debug CLI reruns the optimizer for the session, then prints:
 - the residual between them
 - translation error in meters
 - rotation error in degrees
-
-## Tag prior schema
-
-`tag_priors.yaml` may contain either `tags:` or `priors:` as a sequence:
-
-```yaml
-tags:
-  - id: 1
-    anchor: true
-    position: [0.0, 0.0, 0.0]
-    orientation_xyzw: [0.0, 0.0, 0.0, 1.0]
-    translation_sigma_m: 0.01
-    rotation_sigma_rad: 0.02
-  - id: 2
-    position: [1.0, 0.0, 0.0]
-    orientation_xyzw: [0.0, 0.0, 0.0, 1.0]
-    translation_sigma_m: 0.10
-    rotation_sigma_rad: 0.20
-```
-
-If no tag prior file is provided, the graph falls back to anchoring the first keyframe.
 
 ## Compatibility note
 

@@ -94,7 +94,6 @@ void writeOptimizationOutputs(
   summary_os << "body_frame_id: \"" << session.body_frame_id << "\"\n";
   summary_os << "keyframe_count: " << session.keyframes.size() << "\n";
   summary_os << "tag_observation_count: " << session.tag_observations.size() << "\n";
-  summary_os << "tag_prior_count: " << session.tag_priors.size() << "\n";
   summary_os << "skipped_missing_tf_tag_observations: "
              << session.skipped_missing_tf_tag_observations << "\n";
   summary_os << "skipped_unavailable_tag_observations: "
@@ -102,8 +101,11 @@ void writeOptimizationOutputs(
   summary_os << "skipped_non_body_tag_observations: "
              << session.skipped_non_body_tag_observations << "\n";
   summary_os << "between_factor_count: " << result.between_factor_count << "\n";
+  summary_os << "between_factor_inflated_count: " << result.between_factor_inflated_count << "\n";
+  summary_os << "between_factor_skipped_count: " << result.between_factor_skipped_count << "\n";
   summary_os << "tag_observation_factor_count: " << result.tag_observation_factor_count << "\n";
   summary_os << "prior_factor_count: " << result.prior_factor_count << "\n";
+  summary_os << "optimizer_pose_prior_count: " << result.optimizer_pose_prior_count << "\n";
   summary_os << "visual_factor_count: " << result.visual_factor_count << "\n";
   summary_os << "landmark_count: " << result.landmark_count << "\n";
   summary_os << "initial_error: " << result.initial_error << "\n";
