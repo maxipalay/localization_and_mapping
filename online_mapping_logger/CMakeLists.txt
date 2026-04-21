@@ -93,6 +93,7 @@ install(DIRECTORY config/
 )
 
 install(PROGRAMS
+  scripts/export_online_optimizer_poses.py
   scripts/inspect_logged_session_covariance.py
   DESTINATION lib/${PROJECT_NAME}
 )
