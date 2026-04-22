@@ -583,8 +583,19 @@ std::optional<OptimizationResult> Optimizer::push(
     imu_factors_added = 1;
   }
 
+  double stereo_interval_quality = 1.0;
+  double stereo_sigma_scale = 1.0;
+  bool skipped_stereo = false;
+  if (cfg_.use_interval_health_for_vo_between)
+  {
+    stereo_interval_quality = computeVoBetweenIntervalQuality_(kf.interval_health, cfg_);
+    stereo_sigma_scale =
+        1.0 + (1.0 - stereo_interval_quality) * std::max(0.0, cfg_.between_health_max_sigma_scale - 1.0);
+    skipped_stereo = shouldSkipVoBetweenInterval_(kf.interval_health, cfg_, stereo_interval_quality);
+  }
+
   auto stereoNoise = maybeHuberize_(
-      gtsam::noiseModel::Isotropic::Sigma(3, cfg_.stereo_sigma_px),
+      gtsam::noiseModel::Isotropic::Sigma(3, cfg_.stereo_sigma_px * stereo_sigma_scale),
       cfg_.stereo_huber_k);
   using StereoFactor = gtsam::GenericStereoFactor<gtsam::Pose3, gtsam::Point3>;
 
@@ -601,39 +612,55 @@ std::optional<OptimizationResult> Optimizer::push(
   // Camera pose derived from body init (consistency)
   const Eigen::Isometry3d T_WC_from_body = T_OB_init * cfg_.T_BC;
 
-  for (size_t i = 0; i < N; ++i)
+  if (!skipped_stereo)
   {
-    if (kf.has_r[i] == 0)
-      continue;
-
-    const TrackId tid = kf.ids[i];
-    const gtsam::Key lk = L_(tid);
-
-    const bool new_landmark = (landmark_last_seen_kf_.find(tid) == landmark_last_seen_kf_.end());
-
-    const double uL = static_cast<double>(kf.pl[i].x);
-    const double v = static_cast<double>(kf.pl[i].y);
-    const double uR = static_cast<double>(kf.pr[i].x);
-
-    const gtsam::StereoPoint2 z(uL, uR, v);
-
-    newFactors.add(StereoFactor(z, stereoNoise, xk, lk, Kst_, body_T_cam_));
-    ++stereo_factors_added;
-
-    if (new_landmark && cfg_.init_landmarks_from_stereo)
+    for (size_t i = 0; i < N; ++i)
     {
-      const double disp = uL - uR;
-      if (disp > 1e-9)
-      {
-        const Eigen::Vector3d pC = triangulateStereoInLeftCam_(uL, uR, v, fx, fy, cx, cy, b);
-        const Eigen::Vector3d pW = T_WC_from_body * pC;
-        newValues.insert(lk, toGtsamPoint3_(pW));
-        ++landmarks_created;
-      }
-    }
+      if (kf.has_r[i] == 0)
+        continue;
 
-    timestamps[lk] = t_now;
-    landmark_last_seen_kf_[tid] = kf.kf_id;
+      const TrackId tid = kf.ids[i];
+      const gtsam::Key lk = L_(tid);
+
+      const bool new_landmark = (landmark_last_seen_kf_.find(tid) == landmark_last_seen_kf_.end());
+
+      const double uL = static_cast<double>(kf.pl[i].x);
+      const double v = static_cast<double>(kf.pl[i].y);
+      const double uR = static_cast<double>(kf.pr[i].x);
+
+      const gtsam::StereoPoint2 z(uL, uR, v);
+
+      newFactors.add(StereoFactor(z, stereoNoise, xk, lk, Kst_, body_T_cam_));
+      ++stereo_factors_added;
+
+      if (new_landmark && cfg_.init_landmarks_from_stereo)
+      {
+        const double disp = uL - uR;
+        if (disp > 1e-9)
+        {
+          const Eigen::Vector3d pC = triangulateStereoInLeftCam_(uL, uR, v, fx, fy, cx, cy, b);
+          const Eigen::Vector3d pW = T_WC_from_body * pC;
+          newValues.insert(lk, toGtsamPoint3_(pW));
+          ++landmarks_created;
+        }
+      }
+
+      timestamps[lk] = t_now;
+      landmark_last_seen_kf_[tid] = kf.kf_id;
+    }
+  }
+
+  if (cfg_.use_interval_health_for_vo_between && (skipped_stereo || stereo_sigma_scale > 1.01))
+  {
+    std::cout << "[Optimizer] kf_id=" << kf.kf_id
+              << " stereo_quality=" << stereo_interval_quality
+              << " stereo_sigma_scale=" << stereo_sigma_scale
+              << " skip_stereo=" << (skipped_stereo ? 1 : 0)
+              << " frames=" << kf.interval_health.num_frames
+              << " pose_valid=" << kf.interval_health.num_pose_valid_frames
+              << " degraded=" << kf.interval_health.num_degraded_frames
+              << " lost=" << kf.interval_health.num_lost_frames
+              << "\n";
   }
 
   gtsam::FixedLagSmoother::Result update_result;
