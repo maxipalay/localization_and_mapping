@@ -11,6 +11,7 @@ Offline global graph refinement for sessions recorded by `online_mapping_logger`
 - Adds body-to-tag observation factors from logged tag TF for loop closure
 - Adds pose priors from the logged online optimizer covariance
 - Anchors the graph with a prior on the first keyframe
+- Can optionally post-align the final result onto one known tag map pose
 - Writes optimized keyframe poses, optimized tag poses, and an optimization summary
 
 This is the only supported path in the main CLI.
@@ -37,11 +38,19 @@ The main CLI is intentionally lightweight. The only supported options are:
 
 - `--session-dir PATH`
 - `--output-dir PATH`
+- `--map-anchor-tag-priors PATH`
+- `--map-anchor-tag-id INTEGER`
+
+If `--map-anchor-tag-priors` and `--map-anchor-tag-id` are provided, the optimizer still runs in the
+normal internal session frame. After optimization completes, the tool reads the chosen tag pose from
+the priors file and applies a single rigid `SE(3)` transform to the whole result so that the chosen
+optimized tag lands on that known map pose. This is a post-hoc export alignment, not a prior or
+factor added to the graph.
 
 ## What it does not do
 
-- It does not load or use `tag_priors.yaml`
-- It does not anchor on tags
+- It does not load or use `tag_priors.yaml` during optimization
+- It does not anchor on tags during optimization
 - It does not expose alternate main-CLI modes for tag-only optimization
 - It does not expose the old broad tuning surface in the main CLI
 

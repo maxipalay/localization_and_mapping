@@ -141,6 +141,10 @@ struct OptimizationResult
   size_t visual_factor_count{0};
   size_t landmark_count{0};
   std::string anchor_strategy;
+  bool has_posthoc_alignment{false};
+  int posthoc_alignment_tag_id{0};
+  std::string posthoc_alignment_source_path;
+  gtsam::Pose3 posthoc_alignment_map_T_session;
 };
 
 }  // namespace offline_global_graph

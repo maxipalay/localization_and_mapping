@@ -111,6 +111,13 @@ void writeOptimizationOutputs(
   summary_os << "initial_error: " << result.initial_error << "\n";
   summary_os << "final_error: " << result.final_error << "\n";
   summary_os << "anchor_strategy: \"" << result.anchor_strategy << "\"\n";
+  summary_os << "has_posthoc_alignment: " << (result.has_posthoc_alignment ? "true" : "false") << "\n";
+  if (result.has_posthoc_alignment) {
+    summary_os << "posthoc_alignment_tag_id: " << result.posthoc_alignment_tag_id << "\n";
+    summary_os << "posthoc_alignment_source_path: \"" << result.posthoc_alignment_source_path << "\"\n";
+    summary_os << "posthoc_alignment_map_T_session:\n";
+    writePoseYaml(summary_os, result.posthoc_alignment_map_T_session, "  ");
+  }
 }
 
 }  // namespace offline_global_graph
