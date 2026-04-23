@@ -19,7 +19,6 @@ online_mapping_logger:
     rgb_match_tolerance_ms: 50.0
     depth_match_tolerance_ms: 50.0
     tag_match_tolerance_ms: 25.0
-    tag_aggregation_window_ms: 50.0
     buffer_duration_s: 5.0
     pending_timeout_s: 4.0
     maintenance_period_ms: 250

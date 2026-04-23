@@ -119,25 +119,12 @@ void KeyframeAssembler::resolvePending_(PendingKeyframe &pending)
 
 #ifdef ONLINE_MAPPING_LOGGER_HAVE_APRILTAG_MSGS
   if (config_.tagStreamEnabled() && !pending.have_tags) {
-    const int64_t window_ns = std::max(
-      config_.tag_match_tolerance_ns,
-      config_.tag_aggregation_window_ns);
-    auto nearby = tag_buffer_.findWithin(
-      pending.keyframe_stamp_ns, window_ns);
-    if (!nearby.empty()) {
-      auto nearest = nearby.front();
-      int64_t best_abs_dt = std::llabs(nearest.first - pending.keyframe_stamp_ns);
-      for (const auto &candidate : nearby) {
-        const int64_t abs_dt = std::llabs(candidate.first - pending.keyframe_stamp_ns);
-        if (abs_dt < best_abs_dt) {
-          best_abs_dt = abs_dt;
-          nearest = candidate;
-        }
-      }
+    const auto nearest = tag_buffer_.findNearest(
+      pending.keyframe_stamp_ns, config_.tag_match_tolerance_ns);
+    if (nearest.has_value()) {
       pending.have_tags = true;
-      pending.tags_stamp_ns = nearest.first;
-      pending.tags_msg = nearest.second;
-      pending.tag_window_msgs = std::move(nearby);
+      pending.tags_stamp_ns = nearest->first;
+      pending.tags_msg = nearest->second;
     }
   }
 #endif

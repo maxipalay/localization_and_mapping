@@ -63,7 +63,6 @@ struct LoggerConfig
   int64_t rgb_match_tolerance_ns{0};
   int64_t depth_match_tolerance_ns{0};
   int64_t tag_match_tolerance_ns{0};
-  int64_t tag_aggregation_window_ns{0};
   int64_t buffer_duration_ns{0};
   int64_t pending_timeout_ns{0};
   int maintenance_period_ms{250};
@@ -104,7 +103,6 @@ struct PendingKeyframe
   bool have_tags{false};
   TagArrayMsgConstSharedPtr tags_msg;
   int64_t tags_stamp_ns{0};
-  std::vector<std::pair<int64_t, TagArrayMsgConstSharedPtr>> tag_window_msgs;
   struct LoggedTagPose
   {
     std::string family;

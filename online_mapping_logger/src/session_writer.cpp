@@ -300,7 +300,6 @@ void SessionWriter::writeSessionMetadata_()
   os << "  rgb_tolerance_ns: " << config_.rgb_match_tolerance_ns << "\n";
   os << "  depth_tolerance_ns: " << config_.depth_match_tolerance_ns << "\n";
   os << "  tag_tolerance_ns: " << config_.tag_match_tolerance_ns << "\n";
-  os << "  tag_aggregation_window_ns: " << config_.tag_aggregation_window_ns << "\n";
   os << "  buffer_duration_ns: " << config_.buffer_duration_ns << "\n";
   os << "  pending_timeout_ns: " << config_.pending_timeout_ns << "\n";
   os << "requirements:\n";
@@ -470,7 +469,7 @@ std::filesystem::path SessionWriter::writeTags_(
   os << "header_frame_id: "
      << yamlDoubleQuoted(pending.tags_msg ? pending.tags_msg->header.frame_id : std::string())
      << "\n";
-  os << "source_message_count: " << pending.tag_window_msgs.size() << "\n";
+  os << "source_message_count: " << (pending.tags_msg ? 1 : 0) << "\n";
   os << "detections:\n";
   for (const auto &tag_pose : pending.tag_poses) {
     os << "  - family: " << yamlDoubleQuoted(tag_pose.family) << "\n";

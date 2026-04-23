@@ -11,10 +11,7 @@
 #include <apriltag_msgs/msg/april_tag_detection_array.hpp>
 #endif
 
-#include <eigen3/Eigen/Geometry>
-
 #include <algorithm>
-#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -34,23 +31,6 @@ int64_t msToNs(double ms)
 int64_t secondsToNs(double seconds)
 {
   return static_cast<int64_t>(seconds * 1000000000.0);
-}
-
-double medianOf(std::vector<double> values)
-{
-  if (values.empty()) {
-    return 0.0;
-  }
-
-  const auto mid_it = values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2);
-  std::nth_element(values.begin(), mid_it, values.end());
-  const double upper = *mid_it;
-  if ((values.size() % 2) != 0U) {
-    return upper;
-  }
-
-  const auto lower_it = std::max_element(values.begin(), mid_it);
-  return 0.5 * (*lower_it + upper);
 }
 
 }  // namespace
@@ -114,8 +94,6 @@ private:
       msToNs(declare_parameter<double>("depth_match_tolerance_ms", 25.0));
     config.tag_match_tolerance_ns =
       msToNs(declare_parameter<double>("tag_match_tolerance_ms", 25.0));
-    config.tag_aggregation_window_ns =
-      msToNs(declare_parameter<double>("tag_aggregation_window_ms", 75.0));
     config.buffer_duration_ns =
       secondsToNs(declare_parameter<double>("buffer_duration_s", 5.0));
     config.pending_timeout_ns =
@@ -251,7 +229,7 @@ private:
       }
       RCLCPP_INFO(
         get_logger(),
-        "Saved keyframe dataset kf_id=%lu stamp_ns=%lld aggregated_tags=%zu resolved_tag_poses=%zu",
+        "Saved keyframe dataset kf_id=%lu stamp_ns=%lld tags=%zu resolved_tag_poses=%zu",
         static_cast<unsigned long>(record_with_tag_poses.pending.keyframe.kf_id),
         static_cast<long long>(record_with_tag_poses.pending.keyframe_stamp_ns),
         record_with_tag_poses.pending.tag_poses.size(),
@@ -287,124 +265,45 @@ private:
     const auto lookup_timeout =
       rclcpp::Duration::from_seconds(config_.tag_tf_lookup_timeout_ms / 1000.0);
 
-    struct AggregateState
-    {
-      PendingKeyframe::LoggedTagPose pose;
-      std::vector<Eigen::Vector3d> translations;
-      std::vector<Eigen::Quaterniond> quaternions;
-    };
-
-    std::vector<std::pair<int64_t, TagArrayMsgConstSharedPtr>> source_msgs;
-    if (!pending.tag_window_msgs.empty()) {
-      source_msgs = pending.tag_window_msgs;
-    } else if (pending.tags_msg) {
-      source_msgs.emplace_back(pending.tags_stamp_ns, pending.tags_msg);
-    } else {
+    if (!pending.tags_msg) {
       return;
     }
 
-    std::map<std::pair<std::string, int32_t>, AggregateState> aggregates;
-    for (const auto &[source_stamp_ns, source_msg] : source_msgs) {
-      if (!source_msg) {
-        continue;
+    const auto lookup_time = rclcpp::Time(pending.tags_msg->header.stamp);
+    pending.tag_poses.reserve(pending.tags_msg->detections.size());
+    for (const auto &detection : pending.tags_msg->detections) {
+      PendingKeyframe::LoggedTagPose tag_pose;
+      tag_pose.family = detection.family;
+      tag_pose.id = detection.id;
+      tag_pose.hamming = detection.hamming;
+      tag_pose.goodness = detection.goodness;
+      tag_pose.decision_margin = detection.decision_margin;
+      tag_pose.centre = {detection.centre.x, detection.centre.y};
+      tag_pose.homography.assign(detection.homography.begin(), detection.homography.end());
+      for (const auto &corner : detection.corners) {
+        tag_pose.corners.push_back({corner.x, corner.y});
       }
-
-      const auto lookup_time = rclcpp::Time(source_msg->header.stamp);
-      for (const auto &detection : source_msg->detections) {
-        const auto key = std::make_pair(detection.family, detection.id);
-        auto &aggregate = aggregates[key];
-        auto &tag_pose = aggregate.pose;
-
-        if (tag_pose.family.empty()) {
-          tag_pose.family = detection.family;
-          tag_pose.id = detection.id;
-          tag_pose.parent_frame_id = config_.body_frame_id;
-          const auto override_it = tag_frame_overrides_.find(detection.id);
-          if (override_it != tag_frame_overrides_.end()) {
-            tag_pose.child_frame_id = override_it->second;
-          } else {
-            tag_pose.child_frame_id = detection.family + ":" + std::to_string(detection.id);
-          }
-        }
-
-        ++tag_pose.sample_count;
-        if (tag_pose.homography.empty() || detection.decision_margin >= tag_pose.decision_margin) {
-          tag_pose.hamming = detection.hamming;
-          tag_pose.goodness = detection.goodness;
-          tag_pose.decision_margin = detection.decision_margin;
-          tag_pose.centre = {detection.centre.x, detection.centre.y};
-          tag_pose.homography.assign(detection.homography.begin(), detection.homography.end());
-          tag_pose.corners.clear();
-          for (const auto &corner : detection.corners) {
-            tag_pose.corners.push_back({corner.x, corner.y});
-          }
-          tag_pose.detection_frame_id = source_msg->header.frame_id;
-          tag_pose.lookup_stamp_ns = source_stamp_ns;
-        }
-
-        try {
-          const auto transform = tf_buffer_->lookupTransform(
-            tag_pose.parent_frame_id,
-            tag_pose.child_frame_id,
-            lookup_time,
-            lookup_timeout);
-          ++tag_pose.resolved_sample_count;
-          aggregate.translations.emplace_back(
-            transform.transform.translation.x,
-            transform.transform.translation.y,
-            transform.transform.translation.z);
-          Eigen::Quaterniond q(
-            transform.transform.rotation.w,
-            transform.transform.rotation.x,
-            transform.transform.rotation.y,
-            transform.transform.rotation.z);
-          q.normalize();
-          aggregate.quaternions.push_back(q);
-        } catch (const tf2::TransformException &ex) {
-          tag_pose.lookup_error = ex.what();
-        }
+      tag_pose.detection_frame_id = pending.tags_msg->header.frame_id;
+      tag_pose.parent_frame_id = config_.body_frame_id;
+      const auto override_it = tag_frame_overrides_.find(detection.id);
+      if (override_it != tag_frame_overrides_.end()) {
+        tag_pose.child_frame_id = override_it->second;
+      } else {
+        tag_pose.child_frame_id = detection.family + ":" + std::to_string(detection.id);
       }
-    }
+      tag_pose.lookup_stamp_ns = pending.tags_stamp_ns;
+      tag_pose.sample_count = 1;
 
-    pending.tag_poses.reserve(aggregates.size());
-    for (auto &[key, aggregate] : aggregates) {
-      auto &tag_pose = aggregate.pose;
-      if (!aggregate.translations.empty() && !aggregate.quaternions.empty()) {
-        std::vector<double> xs;
-        std::vector<double> ys;
-        std::vector<double> zs;
-        xs.reserve(aggregate.translations.size());
-        ys.reserve(aggregate.translations.size());
-        zs.reserve(aggregate.translations.size());
-        for (const auto &t : aggregate.translations) {
-          xs.push_back(t.x());
-          ys.push_back(t.y());
-          zs.push_back(t.z());
-        }
-
-        Eigen::Quaterniond q_ref = aggregate.quaternions.front();
-        Eigen::Vector4d coeff_sum = q_ref.coeffs();
-        for (size_t i = 1; i < aggregate.quaternions.size(); ++i) {
-          Eigen::Quaterniond q = aggregate.quaternions[i];
-          if (q_ref.dot(q) < 0.0) {
-            q.coeffs() *= -1.0;
-          }
-          coeff_sum += q.coeffs();
-        }
-        Eigen::Quaterniond q_avg(coeff_sum[3], coeff_sum[0], coeff_sum[1], coeff_sum[2]);
-        q_avg.normalize();
-
+      try {
+        tag_pose.transform = tf_buffer_->lookupTransform(
+          tag_pose.parent_frame_id,
+          tag_pose.child_frame_id,
+          lookup_time,
+          lookup_timeout);
         tag_pose.pose_available = true;
-        tag_pose.transform.header.stamp = rclcpp::Time(pending.tags_stamp_ns);
-        tag_pose.transform.header.frame_id = tag_pose.parent_frame_id;
-        tag_pose.transform.child_frame_id = tag_pose.child_frame_id;
-        tag_pose.transform.transform.translation.x = medianOf(std::move(xs));
-        tag_pose.transform.transform.translation.y = medianOf(std::move(ys));
-        tag_pose.transform.transform.translation.z = medianOf(std::move(zs));
-        tag_pose.transform.transform.rotation.x = q_avg.x();
-        tag_pose.transform.transform.rotation.y = q_avg.y();
-        tag_pose.transform.transform.rotation.z = q_avg.z();
-        tag_pose.transform.transform.rotation.w = q_avg.w();
+        tag_pose.resolved_sample_count = 1;
+      } catch (const tf2::TransformException &ex) {
+        tag_pose.lookup_error = ex.what();
       }
 
       pending.tag_poses.push_back(std::move(tag_pose));
