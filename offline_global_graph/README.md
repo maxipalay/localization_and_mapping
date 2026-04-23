@@ -1,68 +1,54 @@
 # offline_global_graph
 
-Offline global graph refinement for sessions recorded by `online_mapping_logger`.
+Offline pose-graph refinement for sessions recorded by `online_mapping_logger`.
 
-## Default workflow
+## Current model
 
-- Loads a logged mapping session from disk
-- Initializes body poses from the logged online optimizer poses
-- Adds between factors between consecutive keyframes
-- Uses logged frontend interval-health to inflate or skip weak between factors
-- Adds body-to-tag observation factors from logged tag TF for loop closure
-- Adds pose priors from the logged online optimizer covariance
-- Anchors the graph with a prior on the first keyframe
-- Can optionally post-align the final result onto one known tag map pose
-- Writes optimized keyframe poses, optimized tag poses, and an optimization summary
+The package now implements only the simple path you have been testing:
 
-This is the only supported path in the main CLI.
+- initialize body poses from the logged online optimizer poses
+- add fixed-covariance `between` factors between consecutive keyframes
+- add gated body-to-tag observation factors as loop-closure constraints
+- anchor the solve either to a chosen tag prior or, if none is provided, to the first keyframe
 
-The current default behavior is equivalent to the old explicit command:
-
-```bash
-./build/offline_global_graph/offline_global_graph_cli \
-  --session-dir /tmp/online_mapping_sessions/session_20260419_215555/ \
-  --use-optimizer-pose-priors \
-  --optimizer-pose-prior-covariance-scale 10.0 \
-  --anchor-translation-sigma 0.3 \
-  --anchor-rotation-sigma 0.5 \
-  --tag-observation-huber-k 1.345
-```
+Everything else from the earlier experiments has been removed from the main optimizer path.
 
 ## Usage
 
 ```bash
-ros2 run offline_global_graph offline_global_graph_cli --session-dir /tmp/online_mapping_sessions/session_20260321_102832
+ros2 run offline_global_graph offline_global_graph_cli \
+  --session-dir /tmp/online_mapping_sessions/session_20260321_102832
 ```
 
-The main CLI is intentionally lightweight. The only supported options are:
+Optional tag anchor:
 
-- `--session-dir PATH`
-- `--output-dir PATH`
-- `--map-anchor-tag-priors PATH`
-- `--map-anchor-tag-id INTEGER`
+```bash
+ros2 run offline_global_graph offline_global_graph_cli \
+  --session-dir /tmp/online_mapping_sessions/session_20260321_102832 \
+  --map-anchor-tag-priors /tmp/online_mapping_sessions/session_20260321_102832/tag_priors.yaml \
+  --map-anchor-tag-id 1
+```
 
-If `--map-anchor-tag-priors` and `--map-anchor-tag-id` are provided, the optimizer still runs in the
-normal internal session frame. After optimization completes, the tool reads the chosen tag pose from
-the priors file and applies a single rigid `SE(3)` transform to the whole result so that the chosen
-optimized tag lands on that known map pose. This is a post-hoc export alignment, not a prior or
-factor added to the graph.
+Optional tag filtering:
 
-## What it does not do
+- `--only-tag-id INTEGER`
+- `--exclude-tag-id INTEGER`
 
-- It does not load or use `tag_priors.yaml` during optimization
-- It does not anchor on tags during optimization
-- It does not expose alternate main-CLI modes for tag-only optimization
-- It does not expose the old broad tuning surface in the main CLI
+## Inputs used
 
-## Session inputs used by the optimizer
+The optimizer consumes:
 
-The refinement path consumes these logged fields when present:
+- `optimized_pose_wb` for each keyframe
+- logged tag observations expressed as `body -> tag`
+- an optional tag prior pose from `tag_priors.yaml` for the chosen anchor tag
 
-- `optimized_pose_wb`
-- `optimization.pose_wb_covariance`
-- `between_pose_prev_curr_body`
-- `interval_health`
-- tag observations logged as `body -> tag`
+## Outputs
+
+The optimizer writes:
+
+- `offline_global_graph/optimized_keyframes.csv`
+- `offline_global_graph/optimized_tags.yaml`
+- `offline_global_graph/optimization_summary.yaml`
 
 ## Debugging observations
 
@@ -83,15 +69,6 @@ Useful filters:
 - `--sort ascending|descending`
 - `--csv-output PATH`
 
-The debug CLI reruns the optimizer for the session, then prints:
-
-- the logged `body_T_tag`
-- the predicted `body_T_tag = world_T_body^-1 * world_T_tag`
-- the residual between them
-- translation error in meters
-- rotation error in degrees
-
 ## Compatibility note
 
-Old sessions recorded before the logger fix may still contain camera-frame tag TF. Those
-observations are skipped because v1 expects logged `body -> tag` observations.
+Sessions that logged tag TF in a frame other than the session body frame are still skipped.

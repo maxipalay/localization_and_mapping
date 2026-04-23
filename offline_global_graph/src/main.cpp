@@ -21,6 +21,8 @@ struct CliConfig
   std::filesystem::path output_dir;
   std::filesystem::path map_anchor_tag_priors_path;
   std::optional<int> map_anchor_tag_id;
+  std::vector<int> only_tag_ids;
+  std::vector<int> exclude_tag_ids;
   offline_global_graph::OptimizerConfig optimizer_config;
 };
 
@@ -28,7 +30,8 @@ void printUsage()
 {
   std::cerr
     << "Usage: offline_global_graph_cli --session-dir PATH [--output-dir PATH]\n"
-    << "       [--map-anchor-tag-priors PATH --map-anchor-tag-id INTEGER]\n";
+    << "       [--map-anchor-tag-priors PATH --map-anchor-tag-id INTEGER]\n"
+    << "       [--only-tag-id INTEGER] [--exclude-tag-id INTEGER]\n";
 }
 
 std::string requireValue(int argc, char **argv, int &index, const char *flag)
@@ -94,40 +97,38 @@ gtsam::Pose3 loadMapAnchorTagPose(
           tag_priors_path.string());
 }
 
-void applyPosthocTagMapAlignment(
-  offline_global_graph::OptimizationResult &result,
-  const std::filesystem::path &tag_priors_path,
-  int tag_id)
+bool tagAllowed(
+  int tag_id,
+  const std::vector<int> &only_tag_ids,
+  const std::vector<int> &exclude_tag_ids)
 {
-  const auto tag_it = std::find_if(
-    result.optimized_tags.begin(),
-    result.optimized_tags.end(),
-    [tag_id](const auto &entry) { return entry.first == tag_id; });
-  if (tag_it == result.optimized_tags.end()) {
-    throw std::runtime_error(
-            "cannot align optimized map: tag " + std::to_string(tag_id) +
-            " is not present in optimized tag poses");
+  if (!only_tag_ids.empty() &&
+      std::find(only_tag_ids.begin(), only_tag_ids.end(), tag_id) == only_tag_ids.end()) {
+    return false;
   }
 
-  const gtsam::Pose3 map_T_tag = loadMapAnchorTagPose(tag_priors_path, tag_id);
-  const gtsam::Pose3 map_T_session = map_T_tag * tag_it->second.inverse();
+  return std::find(exclude_tag_ids.begin(), exclude_tag_ids.end(), tag_id) == exclude_tag_ids.end();
+}
 
-  for (auto &entry : result.optimized_keyframes) {
-    entry.second = map_T_session * entry.second;
+offline_global_graph::SessionData filterSessionByTags(
+  const offline_global_graph::SessionData &session,
+  const std::vector<int> &only_tag_ids,
+  const std::vector<int> &exclude_tag_ids)
+{
+  if (only_tag_ids.empty() && exclude_tag_ids.empty()) {
+    return session;
   }
 
-  for (auto &entry : result.optimized_tags) {
-    entry.second = map_T_session * entry.second;
+  offline_global_graph::SessionData filtered = session;
+  filtered.tag_observations.clear();
+
+  for (const auto &observation : session.tag_observations) {
+    if (tagAllowed(observation.tag_id, only_tag_ids, exclude_tag_ids)) {
+      filtered.tag_observations.push_back(observation);
+    }
   }
 
-  result.has_posthoc_alignment = true;
-  result.posthoc_alignment_tag_id = tag_id;
-  result.posthoc_alignment_source_path = tag_priors_path.string();
-  result.posthoc_alignment_map_T_session = map_T_session;
-  if (!result.anchor_strategy.empty()) {
-    result.anchor_strategy += " + ";
-  }
-  result.anchor_strategy += "posthoc_tag_map_align:" + std::to_string(tag_id);
+  return filtered;
 }
 
 }  // namespace
@@ -148,6 +149,12 @@ int main(int argc, char **argv)
       } else if (arg == "--map-anchor-tag-id") {
         cli_config.map_anchor_tag_id = parseInt(
           requireValue(argc, argv, i, "--map-anchor-tag-id"), "--map-anchor-tag-id");
+      } else if (arg == "--only-tag-id") {
+        cli_config.only_tag_ids.push_back(
+          parseInt(requireValue(argc, argv, i, "--only-tag-id"), "--only-tag-id"));
+      } else if (arg == "--exclude-tag-id") {
+        cli_config.exclude_tag_ids.push_back(
+          parseInt(requireValue(argc, argv, i, "--exclude-tag-id"), "--exclude-tag-id"));
       } else if (arg == "--help" || arg == "-h") {
         printUsage();
         return 0;
@@ -166,39 +173,34 @@ int main(int argc, char **argv)
     }
 
     auto session = offline_global_graph::loadSession(cli_config.session_dir);
+    session = filterSessionByTags(session, cli_config.only_tag_ids, cli_config.exclude_tag_ids);
     if (cli_config.output_dir.empty()) {
       cli_config.output_dir = cli_config.session_dir / "offline_global_graph";
     }
-
-    auto result = offline_global_graph::optimizeSession(session, cli_config.optimizer_config);
     if (cli_config.map_anchor_tag_id) {
-      applyPosthocTagMapAlignment(
-        result,
+      cli_config.optimizer_config.use_tag_anchor_prior = true;
+      cli_config.optimizer_config.tag_anchor_id = *cli_config.map_anchor_tag_id;
+      cli_config.optimizer_config.tag_anchor_pose = loadMapAnchorTagPose(
         cli_config.map_anchor_tag_priors_path,
         *cli_config.map_anchor_tag_id);
     }
+
+    auto result = offline_global_graph::optimizeSession(session, cli_config.optimizer_config);
     offline_global_graph::writeOptimizationOutputs(session, result, cli_config.output_dir);
 
     std::cout
       << "Optimized session '" << session.session_name << "'\n"
       << "  keyframes: " << result.optimized_keyframes.size() << "\n"
       << "  tags: " << result.optimized_tags.size() << "\n"
+      << "  filtered_tag_observations_input: " << session.tag_observations.size() << "\n"
       << "  between_factors: " << result.between_factor_count << "\n"
-      << "  between_factors_inflated: " << result.between_factor_inflated_count << "\n"
-      << "  between_factors_skipped: " << result.between_factor_skipped_count << "\n"
-      << "  tag_observations_used: " << session.tag_observations.size() << "\n"
-      << "  optimizer_pose_priors_used: " << result.optimizer_pose_prior_count << "\n"
-      << "  visual_factors_used: " << result.visual_factor_count << "\n"
-      << "  landmarks_used: " << result.landmark_count << "\n"
+      << "  tag_observations_used: " << result.tag_observation_factor_count << "\n"
+      << "  tag_observations_skipped_distance: " << result.tag_observation_skipped_distance_count << "\n"
+      << "  tag_observations_skipped_oblique: " << result.tag_observation_skipped_oblique_count << "\n"
       << "  initial_error: " << result.initial_error << "\n"
       << "  final_error: " << result.final_error << "\n"
       << "  anchor_strategy: " << result.anchor_strategy << "\n"
       << "  output_dir: " << cli_config.output_dir.string() << "\n";
-    if (result.has_posthoc_alignment) {
-      std::cout
-        << "  posthoc_alignment_tag_id: " << result.posthoc_alignment_tag_id << "\n"
-        << "  posthoc_alignment_source: " << result.posthoc_alignment_source_path << "\n";
-    }
 
     return 0;
   } catch (const std::exception &ex) {

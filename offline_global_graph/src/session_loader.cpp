@@ -3,10 +3,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
-#include <array>
 #include <fstream>
-#include <map>
-#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -84,17 +81,6 @@ std::string optionalField(const CsvRow &row, const std::string &key)
 {
   const auto it = row.find(key);
   return it == row.end() ? std::string() : it->second;
-}
-
-std::string fieldAlias(const CsvRow &row, const std::vector<std::string> &candidates)
-{
-  for (const auto &candidate : candidates) {
-    const auto it = row.find(candidate);
-    if (it != row.end()) {
-      return it->second;
-    }
-  }
-  throw std::runtime_error("manifest is missing one of the required aliased fields");
 }
 
 double parseDouble(const std::string &value, const std::string &name)
@@ -176,26 +162,6 @@ std::string nodeStringOr(const YAML::Node &node, const std::string &key, const s
   return value ? value.as<std::string>() : fallback;
 }
 
-template <typename T, size_t N>
-std::array<T, N> nodeFixedArrayOr(const YAML::Node &node, const std::string &key)
-{
-  std::array<T, N> out{};
-  const auto value = node[key];
-  if (!value || !value.IsSequence() || value.size() != N) {
-    return out;
-  }
-  for (size_t i = 0; i < N; ++i) {
-    out[i] = value[i].as<T>();
-  }
-  return out;
-}
-
-double nodeDoubleOr(const YAML::Node &node, const std::string &key, double fallback)
-{
-  const auto value = node[key];
-  return value ? value.as<double>() : fallback;
-}
-
 int64_t nodeInt64Or(const YAML::Node &node, const std::string &key, int64_t fallback)
 {
   const auto value = node[key];
@@ -252,51 +218,6 @@ gtsam::Pose3 poseFromYamlNode(const YAML::Node &node)
     quaternion[3].as<double>());
 }
 
-template <typename T>
-std::vector<T> nodeScalarArray(const YAML::Node &node, const std::string &key)
-{
-  std::vector<T> out;
-  const auto value = node[key];
-  if (!value || !value.IsSequence()) {
-    return out;
-  }
-  out.reserve(value.size());
-  for (const auto &entry : value) {
-    out.push_back(entry.as<T>());
-  }
-  return out;
-}
-
-void loadCameraCalibration(SessionData &session)
-{
-  const auto camera_info_path = session.session_dir / "calibration" / "rgb_camera_info.yaml";
-  if (!std::filesystem::exists(camera_info_path)) {
-    return;
-  }
-
-  const YAML::Node root = YAML::LoadFile(camera_info_path.string());
-  session.camera.width = root["width"] ? root["width"].as<int>() : 0;
-  session.camera.height = root["height"] ? root["height"].as<int>() : 0;
-  session.camera.frame_id = nodeStringOr(root, "header_frame_id", "");
-
-  const auto p = root["p"];
-  if (p && p.IsSequence() && p.size() == 12) {
-    session.camera.fx = p[0].as<double>();
-    session.camera.fy = p[5].as<double>();
-    session.camera.cx = p[2].as<double>();
-    session.camera.cy = p[6].as<double>();
-    return;
-  }
-
-  const auto k = root["k"];
-  if (k && k.IsSequence() && k.size() == 9) {
-    session.camera.fx = k[0].as<double>();
-    session.camera.fy = k[4].as<double>();
-    session.camera.cx = k[2].as<double>();
-    session.camera.cy = k[5].as<double>();
-  }
-}
-
 void loadManifest(SessionData &session)
 {
   const auto manifest_path = session.session_dir / "keyframe_manifest.csv";
@@ -322,14 +243,10 @@ void loadManifest(SessionData &session)
     KeyframeRecord record;
     record.kf_id = parseUint64(requireField(row, "kf_id"), "kf_id");
     record.stamp_ns = parseInt64(requireField(row, "keyframe_stamp_ns"), "keyframe_stamp_ns");
-    record.rgb_path = resolveRelativePath(session.session_dir, optionalField(row, "rgb_path"));
-    record.depth_path = resolveRelativePath(session.session_dir, optionalField(row, "depth_path"));
     record.tags_path = resolveRelativePath(session.session_dir, optionalField(row, "tags_path"));
     record.keyframe_meta_path =
       resolveRelativePath(session.session_dir, optionalField(row, "keyframe_meta_path"));
-    record.frontend_pose_wc = poseFromManifest(row, "frontend_");
-    record.initial_pose_wb = poseFromManifestAliases(row, {"opt_body_", "opt_"});
-    record.optimized_pose_wb = record.initial_pose_wb;
+    record.optimized_pose_wb = poseFromManifestAliases(row, {"opt_body_", "opt_"});
     session.keyframes.push_back(std::move(record));
   }
 
@@ -352,78 +269,8 @@ void loadKeyframeMetadata(SessionData &session)
     }
 
     const YAML::Node root = YAML::LoadFile(keyframe.keyframe_meta_path.string());
-    const bool has_vo_between = nodeBoolOr(root, "has_vo_between", false);
-
     if (const YAML::Node optimized_pose_wb = root["optimized_pose_wb"]) {
       keyframe.optimized_pose_wb = poseFromYamlNode(optimized_pose_wb);
-    }
-
-    if (has_vo_between) {
-      YAML::Node between_node = root["between_pose_prev_curr_body"];
-      if (!between_node) {
-        between_node = root["between_pose_prev_curr"];
-      }
-      if (between_node) {
-        keyframe.between_pose_prev_curr_body = poseFromYamlNode(between_node);
-      }
-    }
-
-    if (const YAML::Node interval_health = root["interval_health"]) {
-      keyframe.interval_health.num_frames = interval_health["num_frames"] ? interval_health["num_frames"].as<uint32_t>() : 0;
-      keyframe.interval_health.num_pose_valid_frames =
-        interval_health["num_pose_valid_frames"] ? interval_health["num_pose_valid_frames"].as<uint32_t>() : 0;
-      keyframe.interval_health.num_degraded_frames =
-        interval_health["num_degraded_frames"] ? interval_health["num_degraded_frames"].as<uint32_t>() : 0;
-      keyframe.interval_health.num_lost_frames =
-        interval_health["num_lost_frames"] ? interval_health["num_lost_frames"].as<uint32_t>() : 0;
-      keyframe.interval_health.min_tracks = interval_health["min_tracks"] ? interval_health["min_tracks"].as<int32_t>() : 0;
-      keyframe.interval_health.mean_tracks = nodeDoubleOr(interval_health, "mean_tracks", 0.0);
-      keyframe.interval_health.min_track_retention = nodeDoubleOr(interval_health, "min_track_retention", 1.0);
-      keyframe.interval_health.mean_track_retention = nodeDoubleOr(interval_health, "mean_track_retention", 1.0);
-      keyframe.interval_health.mean_pnp_inlier_ratio = nodeDoubleOr(interval_health, "mean_pnp_inlier_ratio", 1.0);
-      keyframe.interval_health.max_pnp_reproj_rmse_px = nodeDoubleOr(interval_health, "max_pnp_reproj_rmse_px", 0.0);
-      keyframe.interval_health.min_track_coverage = nodeDoubleOr(interval_health, "min_track_coverage", 1.0);
-      keyframe.interval_health.mean_track_coverage = nodeDoubleOr(interval_health, "mean_track_coverage", 1.0);
-    }
-
-    if (const YAML::Node optimization = root["optimization"]) {
-      const bool has_pose_wb_covariance = nodeBoolOr(optimization, "has_pose_wb_covariance", false);
-      const auto pose_wb_covariance = nodeFixedArrayOr<double, 36>(optimization, "pose_wb_covariance");
-      if (has_pose_wb_covariance) {
-        keyframe.has_pose_wb_covariance = true;
-        keyframe.pose_wb_covariance = pose_wb_covariance;
-      }
-    }
-
-    const auto tracks = root["tracks"];
-    if (!tracks) {
-      continue;
-    }
-
-    const auto track_ids = nodeScalarArray<uint32_t>(tracks, "track_ids");
-    const auto u_l = nodeScalarArray<float>(tracks, "u_l");
-    const auto v_l = nodeScalarArray<float>(tracks, "v_l");
-    const auto u_r = nodeScalarArray<float>(tracks, "u_r");
-    const auto v_r = nodeScalarArray<float>(tracks, "v_r");
-    const auto has_right = nodeScalarArray<int>(tracks, "has_right");
-
-    const size_t n = track_ids.size();
-    if (n == 0 || u_l.size() != n || v_l.size() != n || u_r.size() != n || v_r.size() != n ||
-        has_right.size() != n) {
-      continue;
-    }
-
-    keyframe.track_observations.clear();
-    keyframe.track_observations.reserve(n);
-    for (size_t i = 0; i < n; ++i) {
-      KeyframeRecord::TrackObservation observation;
-      observation.track_id = track_ids[i];
-      observation.u_l = u_l[i];
-      observation.v_l = v_l[i];
-      observation.u_r = u_r[i];
-      observation.v_r = v_r[i];
-      observation.has_right = (has_right[i] != 0);
-      keyframe.track_observations.push_back(observation);
     }
   }
 }
@@ -510,7 +357,6 @@ SessionData loadSession(const std::filesystem::path &session_dir)
   }
 
   loadSessionMetadata(session);
-  loadCameraCalibration(session);
   loadManifest(session);
   loadKeyframeMetadata(session);
   loadTagObservations(session);

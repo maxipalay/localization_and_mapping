@@ -101,23 +101,15 @@ void writeOptimizationOutputs(
   summary_os << "skipped_non_body_tag_observations: "
              << session.skipped_non_body_tag_observations << "\n";
   summary_os << "between_factor_count: " << result.between_factor_count << "\n";
-  summary_os << "between_factor_inflated_count: " << result.between_factor_inflated_count << "\n";
-  summary_os << "between_factor_skipped_count: " << result.between_factor_skipped_count << "\n";
   summary_os << "tag_observation_factor_count: " << result.tag_observation_factor_count << "\n";
+  summary_os << "tag_observation_skipped_distance_count: "
+             << result.tag_observation_skipped_distance_count << "\n";
+  summary_os << "tag_observation_skipped_oblique_count: "
+             << result.tag_observation_skipped_oblique_count << "\n";
   summary_os << "prior_factor_count: " << result.prior_factor_count << "\n";
-  summary_os << "optimizer_pose_prior_count: " << result.optimizer_pose_prior_count << "\n";
-  summary_os << "visual_factor_count: " << result.visual_factor_count << "\n";
-  summary_os << "landmark_count: " << result.landmark_count << "\n";
   summary_os << "initial_error: " << result.initial_error << "\n";
   summary_os << "final_error: " << result.final_error << "\n";
   summary_os << "anchor_strategy: \"" << result.anchor_strategy << "\"\n";
-  summary_os << "has_posthoc_alignment: " << (result.has_posthoc_alignment ? "true" : "false") << "\n";
-  if (result.has_posthoc_alignment) {
-    summary_os << "posthoc_alignment_tag_id: " << result.posthoc_alignment_tag_id << "\n";
-    summary_os << "posthoc_alignment_source_path: \"" << result.posthoc_alignment_source_path << "\"\n";
-    summary_os << "posthoc_alignment_map_T_session:\n";
-    writePoseYaml(summary_os, result.posthoc_alignment_map_T_session, "  ");
-  }
 }
 
 }  // namespace offline_global_graph
