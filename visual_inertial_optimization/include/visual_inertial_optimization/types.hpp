@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <vector>
 
 #include <Eigen/Geometry>
 #include <opencv2/opencv.hpp>
@@ -44,6 +45,12 @@ struct OptimizationStats {
   int cliques = 0;
 };
 
+struct OptimizedKeyframePoseEstimate {
+  uint64_t kf_id = 0;
+  Eigen::Isometry3d T_WC_opt = Eigen::Isometry3d::Identity();
+  Eigen::Isometry3d T_WB_opt = Eigen::Isometry3d::Identity();
+};
+
 struct OptimizationResult {
   uint64_t kf_id = 0;
   double t_s = 0.0;
@@ -52,6 +59,7 @@ struct OptimizationResult {
   Eigen::Isometry3d T_WC_opt = Eigen::Isometry3d::Identity();
 
   Eigen::Isometry3d T_WB_opt = Eigen::Isometry3d::Identity();
+  std::vector<OptimizedKeyframePoseEstimate> active_keyframe_poses;
 
   OptimizationStats stats;
 

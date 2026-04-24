@@ -5,6 +5,7 @@ float64 t_s
 # Optimized poses in map/world coordinates.
 geometry_msgs/Pose pose_wc_opt
 geometry_msgs/Pose pose_wb_opt
+visual_inertial/OptimizedKeyframePose[] active_keyframe_poses
 
 visual_inertial/OptimizationStats stats
 

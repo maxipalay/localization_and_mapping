@@ -679,6 +679,15 @@ std::optional<OptimizationResult> Optimizer::push(
     return std::nullopt;
   }
 
+  active_kf_ids_.push_back(kf.kf_id);
+  if (cfg_.window_size > 0)
+  {
+    while (active_kf_ids_.size() > cfg_.window_size)
+    {
+      active_kf_ids_.pop_front();
+    }
+  }
+
   OptimizationResult out;
   out.kf_id = kf.kf_id;
   out.t_s = kf.t_end;
@@ -736,6 +745,34 @@ std::optional<OptimizationResult> Optimizer::push(
   catch (...)
   {
     std::cout << "[Optimizer] Failed to read bias estimate (unknown)\n";
+  }
+
+  {
+    std::deque<uint64_t> surviving_active_kf_ids;
+    out.active_keyframe_poses.reserve(active_kf_ids_.size());
+    for (const uint64_t active_kf_id : active_kf_ids_)
+    {
+      try
+      {
+        const gtsam::Pose3 T_WB_active_g =
+            smoother_.calculateEstimate<gtsam::Pose3>(X_(active_kf_id));
+        OptimizedKeyframePoseEstimate active_entry;
+        active_entry.kf_id = active_kf_id;
+        active_entry.T_WB_opt = toEigenIsometry3d_(T_WB_active_g);
+        active_entry.T_WC_opt = active_entry.T_WB_opt * cfg_.T_BC;
+        out.active_keyframe_poses.push_back(std::move(active_entry));
+        surviving_active_kf_ids.push_back(active_kf_id);
+      }
+      catch (const std::exception &)
+      {
+        // Keyframe already fell out of the fixed-lag smoother.
+      }
+      catch (...)
+      {
+        // Keyframe already fell out of the fixed-lag smoother.
+      }
+    }
+    active_kf_ids_.swap(surviving_active_kf_ids);
   }
 
   try

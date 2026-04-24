@@ -61,6 +61,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/FrontendIntervalHealth.msg"
   "msg/Keyframe.msg"
   "msg/ImuBias.msg"
+  "msg/OptimizedKeyframePose.msg"
   "msg/OptimizationStats.msg"
   "msg/OptimizationResult.msg"
   "msg/Tracks.msg"

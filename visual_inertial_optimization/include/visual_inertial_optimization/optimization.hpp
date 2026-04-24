@@ -194,6 +194,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -312,6 +313,7 @@ public:
         smoother_ = gtsam::IncrementalFixedLagSmoother(lag_kf);
 
         landmark_last_seen_kf_.clear();
+        active_kf_ids_.clear();
     }
 
     std::optional<OptimizationResult> push(
@@ -375,6 +377,7 @@ private:
     std::optional<gtsam::Pose3> body_T_cam_;
     bool initialized_ = false;
     uint64_t last_kf_id_ = 0;
+    std::deque<uint64_t> active_kf_ids_;
 
     std::unordered_map<TrackId, uint64_t> landmark_last_seen_kf_;
 

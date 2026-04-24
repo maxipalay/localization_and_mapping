@@ -670,6 +670,15 @@ private:
             opt_msg.t_s = res->t_s;
             opt_msg.pose_wc_opt = isoToPoseMsg(res->T_WC_opt);
             opt_msg.pose_wb_opt = isoToPoseMsg(res->T_WB_opt);
+            opt_msg.active_keyframe_poses.reserve(res->active_keyframe_poses.size());
+            for (const auto &active_pose : res->active_keyframe_poses)
+            {
+                visual_inertial::msg::OptimizedKeyframePose active_pose_msg;
+                active_pose_msg.kf_id = active_pose.kf_id;
+                active_pose_msg.pose_wc_opt = isoToPoseMsg(active_pose.T_WC_opt);
+                active_pose_msg.pose_wb_opt = isoToPoseMsg(active_pose.T_WB_opt);
+                opt_msg.active_keyframe_poses.push_back(std::move(active_pose_msg));
+            }
             opt_msg.stats.num_keyframes_in_window = res->stats.num_keyframes_in_window;
             opt_msg.stats.num_landmarks_alive = res->stats.num_landmarks_alive;
             opt_msg.stats.num_landmarks_created = res->stats.num_landmarks_created;
