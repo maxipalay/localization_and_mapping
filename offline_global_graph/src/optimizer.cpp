@@ -65,6 +65,26 @@ bool isDistantTagObservation(
   return std::isfinite(range_m) && range_m > config.max_tag_observation_distance_m;
 }
 
+bool hasTooMuchHamming(
+  const TagObservation &observation,
+  const OptimizerConfig &config)
+{
+  if (!config.reject_tag_observations_with_hamming) {
+    return false;
+  }
+  return observation.hamming > config.max_tag_hamming;
+}
+
+bool hasTooLowDecisionMargin(
+  const TagObservation &observation,
+  const OptimizerConfig &config)
+{
+  if (!config.reject_low_margin_tag_observations) {
+    return false;
+  }
+  return observation.decision_margin < config.min_tag_decision_margin;
+}
+
 bool isObliqueTagObservation(
   const TagObservation &observation,
   const OptimizerConfig &config)
@@ -137,6 +157,16 @@ OptimizationResult optimizeSession(const SessionData &session, const OptimizerCo
 
     if (isDistantTagObservation(observation, config)) {
       ++result.tag_observation_skipped_distance_count;
+      continue;
+    }
+
+    if (hasTooMuchHamming(observation, config)) {
+      ++result.tag_observation_skipped_hamming_count;
+      continue;
+    }
+
+    if (hasTooLowDecisionMargin(observation, config)) {
+      ++result.tag_observation_skipped_low_margin_count;
       continue;
     }
 

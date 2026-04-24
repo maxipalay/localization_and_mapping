@@ -104,6 +104,10 @@ void writeOptimizationOutputs(
   summary_os << "tag_observation_factor_count: " << result.tag_observation_factor_count << "\n";
   summary_os << "tag_observation_skipped_distance_count: "
              << result.tag_observation_skipped_distance_count << "\n";
+  summary_os << "tag_observation_skipped_hamming_count: "
+             << result.tag_observation_skipped_hamming_count << "\n";
+  summary_os << "tag_observation_skipped_low_margin_count: "
+             << result.tag_observation_skipped_low_margin_count << "\n";
   summary_os << "tag_observation_skipped_oblique_count: "
              << result.tag_observation_skipped_oblique_count << "\n";
   summary_os << "prior_factor_count: " << result.prior_factor_count << "\n";

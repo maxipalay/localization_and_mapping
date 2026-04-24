@@ -196,6 +196,8 @@ int main(int argc, char **argv)
       << "  between_factors: " << result.between_factor_count << "\n"
       << "  tag_observations_used: " << result.tag_observation_factor_count << "\n"
       << "  tag_observations_skipped_distance: " << result.tag_observation_skipped_distance_count << "\n"
+      << "  tag_observations_skipped_hamming: " << result.tag_observation_skipped_hamming_count << "\n"
+      << "  tag_observations_skipped_low_margin: " << result.tag_observation_skipped_low_margin_count << "\n"
       << "  tag_observations_skipped_oblique: " << result.tag_observation_skipped_oblique_count << "\n"
       << "  initial_error: " << result.initial_error << "\n"
       << "  final_error: " << result.final_error << "\n"

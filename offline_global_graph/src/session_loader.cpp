@@ -326,6 +326,9 @@ void loadTagObservations(SessionData &session)
       observation.kf_id = keyframe.kf_id;
       observation.tag_id = detection["id"].as<int>();
       observation.family = nodeStringOr(detection, "family", "");
+      observation.hamming = detection["hamming"] ? detection["hamming"].as<int>() : 0;
+      observation.decision_margin =
+        detection["decision_margin"] ? detection["decision_margin"].as<double>() : 0.0;
       observation.parent_frame_id = nodeStringOr(tf_pose, "parent_frame_id", "");
       observation.child_frame_id = nodeStringOr(tf_pose, "child_frame_id", "");
       observation.detection_frame_id =
