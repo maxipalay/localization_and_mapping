@@ -8,6 +8,7 @@
 #include <sensor_msgs/image_encodings.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 
 namespace
@@ -197,34 +198,90 @@ void SessionWriter::writeBodyToCameraExtrinsics(
      << transform.transform.rotation.w << "]\n";
 }
 
+void SessionWriter::ingestOptimizationResult(const OptimizationResultMsg &msg)
+{
+  const int64_t stamp_ns = stampToNs(msg.header.stamp);
+
+  auto ingest_pose = [this, stamp_ns](
+                       uint64_t kf_id,
+                       const geometry_msgs::msg::Pose &pose_wb,
+                       const geometry_msgs::msg::Pose &pose_wc) {
+      auto &entry = latest_pose_by_kf_id_[kf_id];
+      if (stamp_ns < entry.stamp_ns) {
+        return;
+      }
+      entry.stamp_ns = stamp_ns;
+      entry.pose_wb = pose_wb;
+      entry.pose_wc = pose_wc;
+    };
+
+  ingest_pose(msg.kf_id, msg.pose_wb_opt, msg.pose_wc_opt);
+  for (const auto &active_pose : msg.active_keyframe_poses) {
+    ingest_pose(active_pose.kf_id, active_pose.pose_wb_opt, active_pose.pose_wc_opt);
+  }
+
+  bool manifest_changed = false;
+  for (auto &[kf_id, record] : records_) {
+    const auto pose_it = latest_pose_by_kf_id_.find(kf_id);
+    if (pose_it == latest_pose_by_kf_id_.end() ||
+        pose_it->second.stamp_ns <= record.latest_pose_stamp_ns) {
+      continue;
+    }
+
+    updateStoredRecordPose_(record, pose_it->second);
+    persistStoredRecord_(record);
+    manifest_changed = true;
+  }
+
+  if (manifest_changed) {
+    rewriteManifest_();
+  }
+}
+
 void SessionWriter::writeRecord(const CompletedRecord &record)
 {
-  const auto prefix = formatKfId(record.pending.keyframe.kf_id);
+  PendingKeyframe pending = record.pending;
+  int64_t applied_pose_stamp_ns = 0;
+  applyLatestPoseIfAvailable_(pending, &applied_pose_stamp_ns);
+
+  const auto prefix = formatKfId(pending.keyframe.kf_id);
   const auto rgb_path = writeImage_(
-    record.pending.rgb_msg,
-    std::filesystem::path(rgb_dir_) / (prefix + imageExtensionFor_(*record.pending.rgb_msg, false)));
+    pending.rgb_msg,
+    std::filesystem::path(rgb_dir_) / (prefix + imageExtensionFor_(*pending.rgb_msg, false)));
 
   std::filesystem::path depth_path;
-  if (record.pending.have_depth && record.pending.depth_msg) {
+  if (pending.have_depth && pending.depth_msg) {
     depth_path = writeImage_(
-      record.pending.depth_msg,
+      pending.depth_msg,
       std::filesystem::path(depth_dir_) /
-        (prefix + imageExtensionFor_(*record.pending.depth_msg, true)));
+        (prefix + imageExtensionFor_(*pending.depth_msg, true)));
   }
 
   std::filesystem::path tags_path;
-  if (record.pending.have_tags) {
-    tags_path = writeTags_(record.pending, std::filesystem::path(tags_dir_) / (prefix + ".yaml"));
+  if (pending.have_tags) {
+    tags_path = writeTags_(pending, std::filesystem::path(tags_dir_) / (prefix + ".yaml"));
   }
 
   const auto keyframe_meta_path = writeKeyframeMetadata_(
-    record.pending,
+    pending,
     rgb_path,
     depth_path,
     tags_path,
     std::filesystem::path(keyframes_dir_) / (prefix + ".yaml"));
 
-  appendManifestLine_(record.pending, rgb_path, depth_path, tags_path, keyframe_meta_path);
+  StoredRecord stored;
+  stored.pending = std::move(pending);
+  stored.pending.rgb_msg.reset();
+  stored.pending.depth_msg.reset();
+  stored.pending.tags_msg.reset();
+  stored.rgb_path = rgb_path;
+  stored.depth_path = depth_path;
+  stored.tags_path = tags_path;
+  stored.keyframe_meta_path = keyframe_meta_path;
+  stored.latest_pose_stamp_ns = applied_pose_stamp_ns;
+
+  records_[stored.pending.keyframe.kf_id] = std::move(stored);
+  rewriteManifest_();
 }
 
 void SessionWriter::prepareSessionLayout_()
@@ -260,19 +317,8 @@ void SessionWriter::prepareSessionLayout_()
 
 void SessionWriter::openManifest_()
 {
-  const auto manifest_path = std::filesystem::path(session_dir_) / "keyframe_manifest.csv";
-  manifest_.open(manifest_path, std::ios::out | std::ios::trunc);
-  if (!manifest_.is_open()) {
-    throw std::runtime_error("failed to open manifest: " + manifest_path.string());
-  }
-
-  manifest_
-    << "kf_id,keyframe_stamp_ns,rgb_stamp_ns,depth_stamp_ns,tags_stamp_ns,"
-    << "rgb_path,depth_path,tags_path,keyframe_meta_path,"
-    << "frontend_px,frontend_py,frontend_pz,frontend_qx,frontend_qy,frontend_qz,frontend_qw,"
-    << "opt_body_px,opt_body_py,opt_body_pz,opt_body_qx,opt_body_qy,opt_body_qz,opt_body_qw,"
-    << "track_count,tag_count\n";
-  manifest_.flush();
+  manifest_path_ = std::filesystem::path(session_dir_) / "keyframe_manifest.csv";
+  rewriteManifest_();
 }
 
 void SessionWriter::writeSessionMetadata_()
@@ -525,7 +571,7 @@ void SessionWriter::appendManifestLine_(
   const std::filesystem::path &rgb_path,
   const std::filesystem::path &depth_path,
   const std::filesystem::path &tags_path,
-  const std::filesystem::path &keyframe_meta_path)
+  const std::filesystem::path &keyframe_meta_path) const
 {
   const auto rgb_rel = relativeTo(rgb_path, session_dir_).generic_string();
   const auto depth_rel = depth_path.empty() ? std::string() : relativeTo(depth_path, session_dir_).generic_string();
@@ -534,7 +580,12 @@ void SessionWriter::appendManifestLine_(
 
   const size_t tag_count = pending.tag_poses.size();
 
-  manifest_
+  std::ofstream manifest(manifest_path_, std::ios::out | std::ios::app);
+  if (!manifest.is_open()) {
+    throw std::runtime_error("failed to open manifest for append: " + manifest_path_.string());
+  }
+
+  manifest
     << pending.keyframe.kf_id << ","
     << pending.keyframe_stamp_ns << ","
     << pending.rgb_stamp_ns << ","
@@ -560,7 +611,95 @@ void SessionWriter::appendManifestLine_(
     << pending.opt_result.pose_wb_opt.orientation.w << ","
     << pending.keyframe.track_ids.size() << ","
     << tag_count << "\n";
-  manifest_.flush();
+}
+
+void SessionWriter::rewriteManifest_() const
+{
+  std::ofstream manifest(manifest_path_, std::ios::out | std::ios::trunc);
+  if (!manifest.is_open()) {
+    throw std::runtime_error("failed to open manifest: " + manifest_path_.string());
+  }
+
+  manifest
+    << "kf_id,keyframe_stamp_ns,rgb_stamp_ns,depth_stamp_ns,tags_stamp_ns,"
+    << "rgb_path,depth_path,tags_path,keyframe_meta_path,"
+    << "frontend_px,frontend_py,frontend_pz,frontend_qx,frontend_qy,frontend_qz,frontend_qw,"
+    << "opt_body_px,opt_body_py,opt_body_pz,opt_body_qx,opt_body_qy,opt_body_qz,opt_body_qw,"
+    << "track_count,tag_count\n";
+
+  for (const auto &[kf_id, record] : records_) {
+    const auto rgb_rel = relativeTo(record.rgb_path, session_dir_).generic_string();
+    const auto depth_rel =
+      record.depth_path.empty() ? std::string() : relativeTo(record.depth_path, session_dir_).generic_string();
+    const auto tags_rel =
+      record.tags_path.empty() ? std::string() : relativeTo(record.tags_path, session_dir_).generic_string();
+    const auto meta_rel = relativeTo(record.keyframe_meta_path, session_dir_).generic_string();
+    const size_t tag_count = record.pending.tag_poses.size();
+
+    manifest
+      << record.pending.keyframe.kf_id << ","
+      << record.pending.keyframe_stamp_ns << ","
+      << record.pending.rgb_stamp_ns << ","
+      << record.pending.depth_stamp_ns << ","
+      << record.pending.tags_stamp_ns << ","
+      << csvEscape(rgb_rel) << ","
+      << csvEscape(depth_rel) << ","
+      << csvEscape(tags_rel) << ","
+      << csvEscape(meta_rel) << ","
+      << record.pending.keyframe.pose_odom_body.position.x << ","
+      << record.pending.keyframe.pose_odom_body.position.y << ","
+      << record.pending.keyframe.pose_odom_body.position.z << ","
+      << record.pending.keyframe.pose_odom_body.orientation.x << ","
+      << record.pending.keyframe.pose_odom_body.orientation.y << ","
+      << record.pending.keyframe.pose_odom_body.orientation.z << ","
+      << record.pending.keyframe.pose_odom_body.orientation.w << ","
+      << record.pending.opt_result.pose_wb_opt.position.x << ","
+      << record.pending.opt_result.pose_wb_opt.position.y << ","
+      << record.pending.opt_result.pose_wb_opt.position.z << ","
+      << record.pending.opt_result.pose_wb_opt.orientation.x << ","
+      << record.pending.opt_result.pose_wb_opt.orientation.y << ","
+      << record.pending.opt_result.pose_wb_opt.orientation.z << ","
+      << record.pending.opt_result.pose_wb_opt.orientation.w << ","
+      << record.pending.keyframe.track_ids.size() << ","
+      << tag_count << "\n";
+  }
+}
+
+void SessionWriter::applyLatestPoseIfAvailable_(
+  PendingKeyframe &pending,
+  int64_t *applied_stamp_ns) const
+{
+  if (applied_stamp_ns) {
+    *applied_stamp_ns = 0;
+  }
+
+  const auto it = latest_pose_by_kf_id_.find(pending.keyframe.kf_id);
+  if (it == latest_pose_by_kf_id_.end()) {
+    return;
+  }
+
+  pending.opt_result.pose_wb_opt = it->second.pose_wb;
+  pending.opt_result.pose_wc_opt = it->second.pose_wc;
+  if (applied_stamp_ns) {
+    *applied_stamp_ns = it->second.stamp_ns;
+  }
+}
+
+void SessionWriter::updateStoredRecordPose_(StoredRecord &record, const LatestPoseEntry &entry)
+{
+  record.pending.opt_result.pose_wb_opt = entry.pose_wb;
+  record.pending.opt_result.pose_wc_opt = entry.pose_wc;
+  record.latest_pose_stamp_ns = entry.stamp_ns;
+}
+
+void SessionWriter::persistStoredRecord_(const StoredRecord &record) const
+{
+  writeKeyframeMetadata_(
+    record.pending,
+    record.rgb_path,
+    record.depth_path,
+    record.tags_path,
+    record.keyframe_meta_path);
 }
 
 std::string SessionWriter::imageExtensionFor_(const ImageMsg &msg, bool is_depth) const

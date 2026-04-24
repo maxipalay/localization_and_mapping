@@ -195,6 +195,7 @@ private:
       config_.optimization_result_topic,
       reliable_qos,
       [this](OptimizationResultMsg::ConstSharedPtr msg) {
+        writer_->ingestOptimizationResult(*msg);
         handleAssemblerUpdate_(assembler_->addOptimizationResult(msg));
       });
 
