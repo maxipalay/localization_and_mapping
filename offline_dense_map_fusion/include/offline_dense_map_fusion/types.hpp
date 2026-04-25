@@ -68,15 +68,24 @@ struct FusionConfig
   double truncation_distance_vox{4.0};
   double max_weight{5.0};
   double mesh_min_weight{1e-4};
+  bool export_esdf{true};
+  double esdf_max_distance_m{2.0};
+  double esdf_min_weight{1e-4};
+  double esdf_max_site_distance_vox{1.0};
+  std::optional<double> esdf_slice_height_m;
 };
 
 struct FusionResult
 {
   std::filesystem::path mesh_path;
+  std::filesystem::path esdf_path;
+  std::filesystem::path esdf_slice_occupancy_image_path;
+  std::filesystem::path esdf_slice_occupancy_yaml_path;
   std::vector<std::pair<uint64_t, Pose>> world_T_camera_by_kf;
   size_t frames_fused{0};
   size_t raw_points_considered{0};
   size_t mesh_block_count{0};
+  size_t esdf_block_count{0};
 };
 
 }  // namespace offline_dense_map_fusion

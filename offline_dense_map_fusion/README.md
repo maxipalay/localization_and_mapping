@@ -49,6 +49,11 @@ Optional flags:
 - `--truncation-distance-vox FLOAT`
 - `--max-weight FLOAT`
 - `--mesh-min-weight FLOAT`
+- `--disable-esdf`
+- `--esdf-max-distance FLOAT`
+- `--esdf-min-weight FLOAT`
+- `--esdf-max-site-distance-vox FLOAT`
+- `--esdf-slice-height FLOAT`
 
 ## Extrinsics YAML
 
@@ -64,8 +69,25 @@ The transform is interpreted as `body_T_camera`.
 ## Outputs
 
 - `fused_mesh.ply`
+- `fused_esdf.ply`
+- `esdf_slice_z_<height>_occupancy.pgm`
+- `esdf_slice_z_<height>_occupancy.yaml`
 - `camera_poses.csv`
 - `fusion_summary.yaml`
+
+If `--esdf-slice-height` is provided, the tool samples the 3D ESDF at that world-frame
+`z` height and exports a `map_server`-style 2D occupancy map (`PGM + YAML`) suitable
+for typical ROS planning/navigation consumers.
+
+If you only need the 2D planning map and want to avoid the memory cost of the full
+3D ESDF, combine:
+
+```bash
+--disable-esdf --esdf-slice-height <z>
+```
+
+In that mode the tool uses nvblox's 2D ESDF slice update path instead of building and
+exporting the full 3D ESDF layer.
 
 ## Useful tuning
 

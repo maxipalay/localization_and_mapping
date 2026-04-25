@@ -102,6 +102,16 @@ void writeFusionOutputs(
   summary << "raw_points_considered: " << result.raw_points_considered << "\n";
   summary << "mesh_path: \"" << result.mesh_path.filename().string() << "\"\n";
   summary << "mesh_block_count: " << result.mesh_block_count << "\n";
+  if (!result.esdf_path.empty()) {
+    summary << "esdf_path: \"" << result.esdf_path.filename().string() << "\"\n";
+    summary << "esdf_block_count: " << result.esdf_block_count << "\n";
+  }
+  if (!result.esdf_slice_occupancy_yaml_path.empty()) {
+    summary << "esdf_slice_occupancy_yaml: \""
+            << result.esdf_slice_occupancy_yaml_path.filename().string() << "\"\n";
+    summary << "esdf_slice_occupancy_image: \""
+            << result.esdf_slice_occupancy_image_path.filename().string() << "\"\n";
+  }
   summary << "voxel_size_m: " << config.voxel_size_m << "\n";
   summary << "depth_scale: " << config.depth_scale << "\n";
   summary << "min_depth_m: " << config.min_depth_m << "\n";
@@ -116,6 +126,13 @@ void writeFusionOutputs(
   summary << "truncation_distance_vox: " << config.truncation_distance_vox << "\n";
   summary << "max_weight: " << config.max_weight << "\n";
   summary << "mesh_min_weight: " << config.mesh_min_weight << "\n";
+  summary << "export_esdf: " << (config.export_esdf ? "true" : "false") << "\n";
+  summary << "esdf_max_distance_m: " << config.esdf_max_distance_m << "\n";
+  summary << "esdf_min_weight: " << config.esdf_min_weight << "\n";
+  summary << "esdf_max_site_distance_vox: " << config.esdf_max_site_distance_vox << "\n";
+  if (config.esdf_slice_height_m.has_value()) {
+    summary << "esdf_slice_height_m: " << *config.esdf_slice_height_m << "\n";
+  }
   summary << "intrinsics:\n";
   summary << "  width: " << session.camera.width << "\n";
   summary << "  height: " << session.camera.height << "\n";

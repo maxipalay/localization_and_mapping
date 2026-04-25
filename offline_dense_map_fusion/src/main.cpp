@@ -18,7 +18,10 @@ void printUsage()
     << "       [--min-depth FLOAT] [--max-depth FLOAT] [--pixel-stride INT]\n"
     << "       [--crop-border-px INT] [--max-world-z FLOAT]\n"
     << "       [--truncation-distance-vox FLOAT] [--max-weight FLOAT]\n"
-    << "       [--mesh-min-weight FLOAT]\n";
+    << "       [--mesh-min-weight FLOAT] [--disable-esdf]\n"
+    << "       [--esdf-max-distance FLOAT] [--esdf-min-weight FLOAT]\n"
+    << "       [--esdf-max-site-distance-vox FLOAT]\n"
+    << "       [--esdf-slice-height FLOAT]\n";
 }
 
 std::string requireValue(int argc, char **argv, int &index, const char *flag)
@@ -89,6 +92,22 @@ int main(int argc, char **argv)
       } else if (arg == "--mesh-min-weight") {
         config.mesh_min_weight =
           parseDouble(requireValue(argc, argv, i, "--mesh-min-weight"), "--mesh-min-weight");
+      } else if (arg == "--disable-esdf") {
+        config.export_esdf = false;
+      } else if (arg == "--esdf-max-distance") {
+        config.esdf_max_distance_m =
+          parseDouble(requireValue(argc, argv, i, "--esdf-max-distance"), "--esdf-max-distance");
+      } else if (arg == "--esdf-min-weight") {
+        config.esdf_min_weight =
+          parseDouble(requireValue(argc, argv, i, "--esdf-min-weight"), "--esdf-min-weight");
+      } else if (arg == "--esdf-max-site-distance-vox") {
+        config.esdf_max_site_distance_vox =
+          parseDouble(
+            requireValue(argc, argv, i, "--esdf-max-site-distance-vox"),
+            "--esdf-max-site-distance-vox");
+      } else if (arg == "--esdf-slice-height") {
+        config.esdf_slice_height_m =
+          parseDouble(requireValue(argc, argv, i, "--esdf-slice-height"), "--esdf-slice-height");
       } else if (arg == "--help" || arg == "-h") {
         printUsage();
         return 0;
@@ -117,7 +136,14 @@ int main(int argc, char **argv)
       << "  raw_points_considered: " << result.raw_points_considered << "\n"
       << "  mesh_path: " << result.mesh_path.string() << "\n"
       << "  mesh_blocks: " << result.mesh_block_count << "\n"
-      << "  output_dir: " << output_dir.string() << "\n";
+      << "  esdf_path: " << result.esdf_path.string() << "\n"
+      << "  esdf_blocks: " << result.esdf_block_count << "\n";
+    if (!result.esdf_slice_occupancy_yaml_path.empty()) {
+      std::cout
+        << "  esdf_slice_occupancy_yaml: " << result.esdf_slice_occupancy_yaml_path.string() << "\n"
+        << "  esdf_slice_occupancy_image: " << result.esdf_slice_occupancy_image_path.string() << "\n";
+    }
+    std::cout << "  output_dir: " << output_dir.string() << "\n";
     return 0;
   } catch (const std::exception &ex) {
     std::cerr << "offline_dense_map_fusion_cli: " << ex.what() << "\n";
