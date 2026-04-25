@@ -25,11 +25,26 @@ Useful parameters:
 - `pointcloud_topic` (default: `/esdf_slice_pointcloud`)
 - `frame_id` (default: `map`)
 - `slice_height_m` (default: parsed from filename if possible, else `0.0`)
+- `publish_occupancy` (default: `true`)
 - `publish_pointcloud` (default: `true`)
+- `publish_once` (default: `true`)
+- `pointcloud_stride` (default: `1`)
+- `max_pointcloud_distance_m` (default: unlimited)
 - `publish_rate_hz` (default: `1.0`)
 
 The node publishes with transient-local QoS, so RViz should receive the map even
 if it starts after the first publication.
+
+For lightweight visualization, a good first pass is:
+
+```bash
+ros2 run esdf_slice_map_publisher esdf_slice_map_publisher_node \
+  --ros-args \
+  -p map_yaml_path:=/tmp/online_mapping_sessions/<session>/offline_dense_map_fusion/esdf_slice_z_1_350_occupancy.yaml \
+  -p publish_once:=true \
+  -p pointcloud_stride:=4 \
+  -p max_pointcloud_distance_m:=2.0
+```
 
 ## RViz
 

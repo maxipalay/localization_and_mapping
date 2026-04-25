@@ -318,11 +318,24 @@ sensor_msgs::msg::PointCloud2 buildDistancePointCloud(
   const cv::Mat & distance_meters,
   const std::string & frame_id,
   double slice_height_m,
+  int pointcloud_stride,
+  double max_pointcloud_distance_m,
   const rclcpp::Time & stamp)
 {
   size_t point_count = 0;
-  for (const int8_t cell : map.data) {
-    if (cell >= 0) {
+  for (uint32_t y = 0; y < map.info.height; y += static_cast<uint32_t>(pointcloud_stride)) {
+    for (uint32_t x = 0; x < map.info.width; x += static_cast<uint32_t>(pointcloud_stride)) {
+      const size_t index = static_cast<size_t>(y * map.info.width + x);
+      const int8_t cell = map.data[index];
+      if (cell < 0) {
+        continue;
+      }
+      const float distance = distance_meters.at<float>(static_cast<int>(y), static_cast<int>(x));
+      if (std::isfinite(max_pointcloud_distance_m) &&
+        distance > static_cast<float>(max_pointcloud_distance_m))
+      {
+        continue;
+      }
       ++point_count;
     }
   }
@@ -349,18 +362,24 @@ sensor_msgs::msg::PointCloud2 buildDistancePointCloud(
   const double origin_x = map.info.origin.position.x;
   const double origin_y = map.info.origin.position.y;
 
-  for (uint32_t y = 0; y < map.info.height; ++y) {
-    for (uint32_t x = 0; x < map.info.width; ++x) {
+  for (uint32_t y = 0; y < map.info.height; y += static_cast<uint32_t>(pointcloud_stride)) {
+    for (uint32_t x = 0; x < map.info.width; x += static_cast<uint32_t>(pointcloud_stride)) {
       const size_t index = static_cast<size_t>(y * map.info.width + x);
       const int8_t cell = map.data[index];
       if (cell < 0) {
+        continue;
+      }
+      const float distance = distance_meters.at<float>(static_cast<int>(y), static_cast<int>(x));
+      if (std::isfinite(max_pointcloud_distance_m) &&
+        distance > static_cast<float>(max_pointcloud_distance_m))
+      {
         continue;
       }
 
       *iter_x = static_cast<float>(origin_x + (static_cast<double>(x) + 0.5) * resolution);
       *iter_y = static_cast<float>(origin_y + (static_cast<double>(y) + 0.5) * resolution);
       *iter_z = static_cast<float>(slice_height_m);
-      *iter_intensity = distance_meters.at<float>(static_cast<int>(y), static_cast<int>(x));
+      *iter_intensity = distance;
 
       ++iter_x;
       ++iter_y;
@@ -384,12 +403,23 @@ public:
     topic_ = declare_parameter<std::string>("topic", "/esdf_slice_map");
     pointcloud_topic_ = declare_parameter<std::string>("pointcloud_topic", "/esdf_slice_pointcloud");
     frame_id_ = declare_parameter<std::string>("frame_id", "map");
+    publish_occupancy_ = declare_parameter<bool>("publish_occupancy", true);
     publish_pointcloud_ = declare_parameter<bool>("publish_pointcloud", true);
+    publish_once_ = declare_parameter<bool>("publish_once", true);
+    pointcloud_stride_ = declare_parameter<int>("pointcloud_stride", 1);
+    max_pointcloud_distance_m_ = declare_parameter<double>(
+      "max_pointcloud_distance_m", std::numeric_limits<double>::infinity());
     const double configured_slice_height_m = declare_parameter<double>("slice_height_m", std::numeric_limits<double>::quiet_NaN());
     publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 1.0);
 
     if (map_yaml_path_.empty()) {
       throw std::runtime_error("map_yaml_path parameter is required");
+    }
+    if (!publish_occupancy_ && !publish_pointcloud_) {
+      throw std::runtime_error("at least one of publish_occupancy or publish_pointcloud must be true");
+    }
+    if (pointcloud_stride_ <= 0) {
+      throw std::runtime_error("pointcloud_stride must be positive");
     }
 
     const auto spec = loadMapSpec(map_yaml_path_);
@@ -401,30 +431,45 @@ public:
       slice_height_m_ = parseSliceHeightFromPath(spec.yaml_path).value_or(0.0);
     }
     distance_meters_ = buildDistanceTransformMeters(map_);
-    cloud_ = buildDistancePointCloud(map_, distance_meters_, frame_id_, slice_height_m_, now());
+    if (publish_pointcloud_) {
+      cloud_ = buildDistancePointCloud(
+        map_, distance_meters_, frame_id_, slice_height_m_,
+        pointcloud_stride_, max_pointcloud_distance_m_, now());
+    }
 
     const auto qos = rclcpp::QoS(1).reliable().transient_local();
-    pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(topic_, qos);
+    if (publish_occupancy_) {
+      pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(topic_, qos);
+    }
     if (publish_pointcloud_) {
       pointcloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_topic_, qos);
     }
 
+    const std::string occupancy_suffix = publish_occupancy_ ?
+      ("occupancy on '" + topic_ + "'") :
+      "occupancy disabled";
     const std::string pointcloud_suffix = publish_pointcloud_ ?
-      (" and pointcloud on '" + pointcloud_topic_ + "'") :
-      "";
+      ("pointcloud on '" + pointcloud_topic_ + "'") :
+      "pointcloud disabled";
+    const std::string max_distance_text = std::isfinite(max_pointcloud_distance_m_) ?
+      std::to_string(max_pointcloud_distance_m_) :
+      "inf";
     RCLCPP_INFO(
       get_logger(),
-      "Loaded map '%s' (%ux%u at %.3f m/cell), publishing occupancy on '%s'%s",
+      "Loaded map '%s' (%ux%u at %.3f m/cell), %s, %s, stride=%d, max_distance=%s, publish_once=%s",
       map_yaml_path_.c_str(),
       map_.info.width,
       map_.info.height,
       map_.info.resolution,
-      topic_.c_str(),
-      pointcloud_suffix.c_str());
+      occupancy_suffix.c_str(),
+      pointcloud_suffix.c_str(),
+      pointcloud_stride_,
+      max_distance_text.c_str(),
+      publish_once_ ? "true" : "false");
 
     publish_();
 
-    if (publish_rate_hz_ > 0.0) {
+    if (!publish_once_ && publish_rate_hz_ > 0.0) {
       timer_ = create_wall_timer(
         std::chrono::duration<double>(1.0 / publish_rate_hz_),
         std::bind(&EsdfSliceMapPublisherNode::publish_, this));
@@ -435,8 +480,10 @@ private:
   void publish_()
   {
     const auto stamp = now();
-    map_.header.stamp = stamp;
-    pub_->publish(map_);
+    if (publish_occupancy_ && pub_) {
+      map_.header.stamp = stamp;
+      pub_->publish(map_);
+    }
     if (publish_pointcloud_ && pointcloud_pub_) {
       cloud_.header.stamp = stamp;
       pointcloud_pub_->publish(cloud_);
@@ -447,7 +494,11 @@ private:
   std::string topic_;
   std::string pointcloud_topic_;
   std::string frame_id_;
+  bool publish_occupancy_{true};
   bool publish_pointcloud_{true};
+  bool publish_once_{true};
+  int pointcloud_stride_{1};
+  double max_pointcloud_distance_m_{std::numeric_limits<double>::infinity()};
   double slice_height_m_{0.0};
   double publish_rate_hz_{1.0};
   nav_msgs::msg::OccupancyGrid map_;
