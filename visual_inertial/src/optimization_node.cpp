@@ -286,6 +286,16 @@ public:
 
         max_queue_ = static_cast<size_t>(declare_parameter<int>("max_keyframe_queue", 30));
 
+        operation_mode_ = declare_parameter<std::string>("operation_mode", "mapping");
+        if (operation_mode_ != "mapping" && operation_mode_ != "localization")
+        {
+            RCLCPP_WARN(
+                get_logger(),
+                "Unsupported operation_mode='%s'; falling back to mapping",
+                operation_mode_.c_str());
+            operation_mode_ = "mapping";
+        }
+
         // -------- TF broadcaster --------
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
         tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
@@ -345,7 +355,8 @@ public:
                               { workerLoop_(); });
 
         RCLCPP_INFO(get_logger(),
-                    "Optimization node started. KF=%s L_info=%s R_info=%s TF=%s->%s @ %.1f Hz",
+                    "Optimization node started. mode=%s KF=%s L_info=%s R_info=%s TF=%s->%s @ %.1f Hz",
+                    operation_mode_.c_str(),
                     keyframe_topic_.c_str(), left_info_topic_.c_str(), right_info_topic_.c_str(),
                     map_frame_id_.c_str(), odom_frame_id_.c_str(), tf_pub_rate_hz_);
 
@@ -852,6 +863,7 @@ private:
     std::string body_frame_id_;
     std::string map_frame_id_;
     std::string odom_frame_id_;
+    std::string operation_mode_{"mapping"};
 
     double tf_pub_rate_hz_{30.0};
     rclcpp::TimerBase::SharedPtr tf_timer_;

@@ -7,6 +7,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -26,6 +27,7 @@ def generate_launch_description():
     use_tracks_viz = LaunchConfiguration("use_tracks_viz")
     use_path_viz = LaunchConfiguration("use_path_viz")
     params_file = LaunchConfiguration("params_file")
+    operation_mode = LaunchConfiguration("operation_mode")
 
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(realsense_launch_file),
@@ -54,7 +56,12 @@ def generate_launch_description():
         executable="optimization_node",
         name="visual_inertial_optimization",
         output="screen",
-        parameters=[params_file],
+        parameters=[
+            params_file,
+            {
+                "operation_mode": ParameterValue(operation_mode, value_type=str),
+            },
+        ],
     )
 
     tracks_viz_node = Node(
@@ -88,6 +95,7 @@ def generate_launch_description():
             DeclareLaunchArgument("use_tracks_viz", default_value="false"),
             DeclareLaunchArgument("use_path_viz", default_value="true"),
             DeclareLaunchArgument("params_file", default_value=default_vio_params),
+            DeclareLaunchArgument("operation_mode", default_value="mapping"),
             realsense_launch,
             launch_vio_nodes,
         ]
