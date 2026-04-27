@@ -10,6 +10,7 @@
 #include <visual_inertial/msg/optimization_result.hpp>
 
 #include <visual_inertial_common/types.hpp>
+#include <visual_inertial_localization/localization.hpp>
 #include <visual_inertial_optimization/optimization.hpp>
 #include <visual_inertial_optimization/types.hpp>
 
@@ -294,6 +295,106 @@ public:
                 "Unsupported operation_mode='%s'; falling back to mapping",
                 operation_mode_.c_str());
             operation_mode_ = "mapping";
+        }
+        localization_mode_ = (operation_mode_ == "localization");
+        if (localization_mode_)
+        {
+            visual_inertial_localization::LocalizationConfig localization_cfg;
+            localization_cfg.tag_map_path =
+                declare_parameter<std::string>("localization_tag_map_path", "");
+            localization_cfg.tag_topic =
+                declare_parameter<std::string>("tag_topic", "detections");
+            localization_cfg.tag_tf_lookup_timeout_ms =
+                declare_parameter<double>("tag_tf_lookup_timeout_ms", 50.0);
+            localization_cfg.tag_max_age_s =
+                declare_parameter<double>("localization_tag_max_age_s", 0.5);
+            localization_cfg.tag_buffer_age_s =
+                declare_parameter<double>("tag_buffer_age_s", 2.0);
+            localization_cfg.max_tag_hamming =
+                declare_parameter<int>("max_tag_hamming", 0);
+            localization_cfg.min_tag_decision_margin =
+                declare_parameter<double>("min_tag_decision_margin", 40.0);
+            localization_cfg.max_tag_range_m =
+                declare_parameter<double>("max_tag_range_m", 3.0);
+            localization_cfg.max_tag_oblique_angle_deg =
+                declare_parameter<double>("max_tag_oblique_angle_deg", 40.0);
+            localization_cfg.pose_prior_rot_sigma_rad =
+                declare_parameter<double>("localization_pose_prior_rot_sigma_rad", 0.35);
+            localization_cfg.pose_prior_trans_sigma_m =
+                declare_parameter<double>("localization_pose_prior_trans_sigma_m", 0.10);
+            localization_cfg.pose_prior_huber_k =
+                declare_parameter<double>("localization_pose_prior_huber_k", 1.0);
+            localization_cfg.cluster_translation_m =
+                declare_parameter<double>("localization_cluster_translation_m", 0.75);
+            localization_cfg.cluster_rotation_deg =
+                declare_parameter<double>("localization_cluster_rotation_deg", 20.0);
+            localization_cfg.bootstrap_min_inliers = static_cast<size_t>(
+                declare_parameter<int>("localization_bootstrap_min_inliers", 2));
+            localization_cfg.stable_hypothesis_age_s =
+                declare_parameter<double>("localization_stable_hypothesis_age_s", 1.0);
+            localization_cfg.stable_min_frames = static_cast<size_t>(
+                declare_parameter<int>("localization_stable_min_frames", 3));
+            localization_cfg.stable_translation_m =
+                declare_parameter<double>("localization_stable_translation_m", 0.25);
+            localization_cfg.stable_rotation_deg =
+                declare_parameter<double>("localization_stable_rotation_deg", 8.0);
+            localization_cfg.relocalize_translation_m =
+                declare_parameter<double>("localization_relocalize_translation_m", 0.25);
+            localization_cfg.relocalize_rotation_deg =
+                declare_parameter<double>("localization_relocalize_rotation_deg", 8.0);
+            localization_cfg.tracking_deadband_translation_m =
+                declare_parameter<double>("localization_tracking_deadband_translation_m", 0.05);
+            localization_cfg.tracking_deadband_rotation_deg =
+                declare_parameter<double>("localization_tracking_deadband_rotation_deg", 2.0);
+
+            const auto tag_frame_ids = declare_parameter<std::vector<int64_t>>(
+                "tag_frame_ids", std::vector<int64_t>{});
+            const auto tag_frame_names = declare_parameter<std::vector<std::string>>(
+                "tag_frame_names", std::vector<std::string>{});
+            if (tag_frame_ids.size() != tag_frame_names.size())
+            {
+                RCLCPP_WARN(
+                    get_logger(),
+                    "tag_frame_ids/tag_frame_names size mismatch (%zu vs %zu); ignoring overrides",
+                    tag_frame_ids.size(),
+                    tag_frame_names.size());
+            }
+            else
+            {
+                for (size_t i = 0; i < tag_frame_ids.size(); ++i)
+                {
+                    localization_cfg.tag_frame_overrides.emplace(
+                        static_cast<int>(tag_frame_ids[i]),
+                        tag_frame_names[i]);
+                }
+            }
+
+            localization_ = std::make_unique<visual_inertial_localization::LocalizationModule>(
+                std::move(localization_cfg));
+            const auto report = localization_->loadTagMap();
+            if (localization_->config().tag_map_path.empty())
+            {
+                RCLCPP_WARN(
+                    get_logger(),
+                    "Localization mode selected but localization_tag_map_path is empty");
+            }
+            else if (report.ok)
+            {
+                RCLCPP_INFO(
+                    get_logger(),
+                    "Localization tag map loaded from %s with %zu tags and %zu frame overrides",
+                    localization_->config().tag_map_path.c_str(),
+                    report.mapped_tag_count,
+                    report.frame_override_count);
+            }
+            else
+            {
+                RCLCPP_WARN(
+                    get_logger(),
+                    "Localization tag map could not be loaded from %s: %s",
+                    localization_->config().tag_map_path.c_str(),
+                    report.message.c_str());
+            }
         }
 
         // -------- TF broadcaster --------
@@ -864,6 +965,8 @@ private:
     std::string map_frame_id_;
     std::string odom_frame_id_;
     std::string operation_mode_{"mapping"};
+    bool localization_mode_{false};
+    std::unique_ptr<visual_inertial_localization::LocalizationModule> localization_;
 
     double tf_pub_rate_hz_{30.0};
     rclcpp::TimerBase::SharedPtr tf_timer_;

@@ -12,8 +12,11 @@
   <build_depend>visual_inertial_frontend</build_depend>
   <exec_depend>visual_inertial_frontend</exec_depend>
 
-    <build_depend>visual_inertial_common</build_depend>
+  <build_depend>visual_inertial_common</build_depend>
   <exec_depend>visual_inertial_common</exec_depend>
+
+  <build_depend>visual_inertial_localization</build_depend>
+  <exec_depend>visual_inertial_localization</exec_depend>
 
   <build_depend>visual_inertial_optimization</build_depend>
   <exec_depend>visual_inertial_optimization</exec_depend>

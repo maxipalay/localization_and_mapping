@@ -11,6 +11,7 @@ find_package(image_transport REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(visual_inertial_frontend REQUIRED)  # uses the installed export
 find_package(visual_inertial_common REQUIRED)
+find_package(visual_inertial_localization REQUIRED)
 find_package(visual_inertial_optimization REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -49,6 +50,7 @@ target_link_libraries(tracking_node
 
 target_link_libraries(optimization_node
   visual_inertial_optimization::visual_inertial_optimization
+  visual_inertial_localization::visual_inertial_localization
   visual_inertial_common::visual_inertial_common
   TBB::tbb
 )
