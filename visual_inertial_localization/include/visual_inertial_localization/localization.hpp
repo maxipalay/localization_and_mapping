@@ -85,6 +85,13 @@ struct BootstrapEstimate
     double score{0.0};
 };
 
+struct PosePriorEstimate
+{
+    Eigen::Isometry3d T_MB = Eigen::Isometry3d::Identity();
+    size_t support_count{0};
+    double score{0.0};
+};
+
 class LocalizationModule
 {
 public:
@@ -99,6 +106,7 @@ public:
     std::optional<BootstrapEstimate> estimateBootstrap(
         const rclcpp::Time &stamp,
         const Eigen::Isometry3d &T_OB) const;
+    std::optional<PosePriorEstimate> estimatePosePrior(const rclcpp::Time &stamp) const;
     size_t bufferedObservationCount() const noexcept;
 
     const LocalizationConfig &config() const noexcept;

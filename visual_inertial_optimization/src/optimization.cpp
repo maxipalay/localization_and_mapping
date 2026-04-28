@@ -397,7 +397,8 @@ static std::array<double, Rows * Cols> toRowMajorArray_(const gtsam::Matrix &M)
 
 std::optional<OptimizationResult> Optimizer::push(
     const KeyframeEvent &kf,
-    const std::optional<Eigen::Isometry3d> &T_Bkm1_Bk_meas)
+    const std::optional<Eigen::Isometry3d> &T_Bkm1_Bk_meas,
+    const std::optional<AbsolutePosePrior> &absolute_pose_prior)
 {
   std::lock_guard<std::mutex> lk(mtx_);
 
@@ -515,6 +516,22 @@ std::optional<OptimizationResult> Optimizer::push(
                                     .finished();
     auto biasNoise = gtsam::noiseModel::Diagonal::Sigmas(bsig);
     newFactors.add(gtsam::PriorFactor<gtsam::imuBias::ConstantBias>(bk, gtsam::imuBias::ConstantBias(), biasNoise));
+    prior_added++;
+  }
+
+  if (initialized_ && absolute_pose_prior.has_value())
+  {
+    const gtsam::Vector6 sigmas =
+        (gtsam::Vector6() << absolute_pose_prior->rot_sigma_rad, absolute_pose_prior->rot_sigma_rad, absolute_pose_prior->rot_sigma_rad,
+         absolute_pose_prior->trans_sigma_m, absolute_pose_prior->trans_sigma_m, absolute_pose_prior->trans_sigma_m)
+            .finished();
+    auto posePriorNoise = maybeHuberize_(
+        gtsam::noiseModel::Diagonal::Sigmas(sigmas),
+        absolute_pose_prior->huber_k);
+    newFactors.add(gtsam::PriorFactor<gtsam::Pose3>(
+        xk,
+        toGtsamPose3_(absolute_pose_prior->T_WB),
+        posePriorNoise));
     prior_added++;
   }
 

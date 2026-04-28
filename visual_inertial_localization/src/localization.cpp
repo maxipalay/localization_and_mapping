@@ -303,6 +303,83 @@ std::optional<BootstrapEstimate> LocalizationModule::estimateBootstrap(
     return estimate;
 }
 
+std::optional<PosePriorEstimate> LocalizationModule::estimatePosePrior(const rclcpp::Time &stamp) const
+{
+    const auto observations = recentObservationsForStamp(stamp);
+    if (observations.empty())
+    {
+        return std::nullopt;
+    }
+
+    struct Hypothesis
+    {
+        Eigen::Isometry3d T_MB = Eigen::Isometry3d::Identity();
+        double score{0.0};
+    };
+
+    std::vector<Hypothesis> hypotheses;
+    hypotheses.reserve(observations.size());
+    for (const auto &observation : observations)
+    {
+        const auto mapped_it = mapped_tags_.find(observation.tag_id);
+        if (mapped_it == mapped_tags_.end())
+        {
+            continue;
+        }
+
+        Hypothesis h;
+        h.T_MB = mapped_it->second * observation.T_BT.inverse();
+        h.score = observation.decision_margin;
+        hypotheses.push_back(std::move(h));
+    }
+
+    if (hypotheses.empty())
+    {
+        return std::nullopt;
+    }
+
+    const double rot_threshold_rad = config_.cluster_rotation_deg * std::acos(-1.0) / 180.0;
+    size_t best_index = 0;
+    size_t best_support = 0;
+    double best_score = -1.0;
+    for (size_t i = 0; i < hypotheses.size(); ++i)
+    {
+        size_t support = 0;
+        double score = 0.0;
+        for (size_t j = 0; j < hypotheses.size(); ++j)
+        {
+            const double trans_error =
+                (hypotheses[i].T_MB.translation() - hypotheses[j].T_MB.translation()).norm();
+            const double rot_error =
+                rotationDistanceRad(hypotheses[i].T_MB.linear(), hypotheses[j].T_MB.linear());
+            if (trans_error <= config_.cluster_translation_m &&
+                rot_error <= rot_threshold_rad)
+            {
+                ++support;
+                score += hypotheses[j].score;
+            }
+        }
+
+        if (support > best_support || (support == best_support && score > best_score))
+        {
+            best_index = i;
+            best_support = support;
+            best_score = score;
+        }
+    }
+
+    if (best_support < config_.bootstrap_min_inliers)
+    {
+        return std::nullopt;
+    }
+
+    PosePriorEstimate estimate;
+    estimate.T_MB = hypotheses[best_index].T_MB;
+    estimate.support_count = best_support;
+    estimate.score = best_score;
+    return estimate;
+}
+
 size_t LocalizationModule::bufferedObservationCount() const noexcept
 {
     std::lock_guard<std::mutex> lk(tag_obs_mtx_);

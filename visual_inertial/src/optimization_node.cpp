@@ -766,8 +766,24 @@ private:
                 between_meas = ev_for_optimization.T_Bkm1_Bk;
             }
 
+            std::optional<AbsolutePosePrior> absolute_pose_prior = std::nullopt;
+            if (localization_mode_ && localization_bootstrapped_ && localization_)
+            {
+                const auto pose_prior_estimate =
+                    localization_->estimatePosePrior(rclcpp::Time(msg.header.stamp));
+                if (pose_prior_estimate.has_value())
+                {
+                    AbsolutePosePrior prior;
+                    prior.T_WB = pose_prior_estimate->T_MB;
+                    prior.rot_sigma_rad = localization_->config().pose_prior_rot_sigma_rad;
+                    prior.trans_sigma_m = localization_->config().pose_prior_trans_sigma_m;
+                    prior.huber_k = localization_->config().pose_prior_huber_k;
+                    absolute_pose_prior = std::move(prior);
+                }
+            }
+
             const auto optimize_start = std::chrono::steady_clock::now();
-            const auto res = opt->push(ev_for_optimization, between_meas);
+            const auto res = opt->push(ev_for_optimization, between_meas, absolute_pose_prior);
             const auto optimize_end = std::chrono::steady_clock::now();
             const double optimize_ms =
                 std::chrono::duration<double, std::milli>(optimize_end - optimize_start).count();

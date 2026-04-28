@@ -51,6 +51,13 @@ struct OptimizedKeyframePoseEstimate {
   Eigen::Isometry3d T_WB_opt = Eigen::Isometry3d::Identity();
 };
 
+struct AbsolutePosePrior {
+  Eigen::Isometry3d T_WB = Eigen::Isometry3d::Identity();
+  double rot_sigma_rad = 0.35;
+  double trans_sigma_m = 0.10;
+  double huber_k = 1.0;
+};
+
 struct OptimizationResult {
   uint64_t kf_id = 0;
   double t_s = 0.0;
