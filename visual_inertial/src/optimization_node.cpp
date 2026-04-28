@@ -731,15 +731,43 @@ private:
             }
 
             const auto ev = toKeyframeEvent(msg);
+            KeyframeEvent ev_for_optimization = ev;
+
+            if (localization_mode_ && localization_)
+            {
+                if (!localization_bootstrapped_)
+                {
+                    const auto bootstrap = localization_->estimateBootstrap(
+                        rclcpp::Time(msg.header.stamp),
+                        ev.T_OB);
+                    if (!bootstrap.has_value())
+                    {
+                        RCLCPP_INFO_THROTTLE(
+                            get_logger(), *get_clock(), 2000,
+                            "Localization mode is waiting for a stable tag-based bootstrap");
+                        continue;
+                    }
+
+                    localization_T_map_odom_ = bootstrap->T_MO;
+                    localization_bootstrapped_ = true;
+                    RCLCPP_INFO(
+                        get_logger(),
+                        "Localization bootstrap established: support=%zu score=%.1f",
+                        bootstrap->support_count,
+                        bootstrap->score);
+                }
+
+                ev_for_optimization.T_OB = localization_T_map_odom_ * ev.T_OB;
+            }
 
             std::optional<Eigen::Isometry3d> between_meas = std::nullopt;
-            if (ev.has_vo_between)
+            if (ev_for_optimization.has_vo_between)
             {
-                between_meas = ev.T_Bkm1_Bk;
+                between_meas = ev_for_optimization.T_Bkm1_Bk;
             }
 
             const auto optimize_start = std::chrono::steady_clock::now();
-            const auto res = opt->push(ev, between_meas);
+            const auto res = opt->push(ev_for_optimization, between_meas);
             const auto optimize_end = std::chrono::steady_clock::now();
             const double optimize_ms =
                 std::chrono::duration<double, std::milli>(optimize_end - optimize_start).count();
@@ -874,6 +902,11 @@ private:
                 }
             }
 
+            if (localization_mode_ && localization_bootstrapped_)
+            {
+                localization_T_map_odom_ = T_map_odom;
+            }
+
             have_map_odom_.store(true);
         }
     }
@@ -1003,6 +1036,8 @@ private:
     std::string operation_mode_{"mapping"};
     bool localization_mode_{false};
     std::unique_ptr<visual_inertial_localization::LocalizationModule> localization_;
+    bool localization_bootstrapped_{false};
+    Eigen::Isometry3d localization_T_map_odom_ = Eigen::Isometry3d::Identity();
 
     double tf_pub_rate_hz_{30.0};
     rclcpp::TimerBase::SharedPtr tf_timer_;

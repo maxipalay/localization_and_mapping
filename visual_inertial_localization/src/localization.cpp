@@ -28,6 +28,14 @@ Eigen::Isometry3d transformMsgToIso(const geometry_msgs::msg::Transform &t)
     return T;
 }
 
+double rotationDistanceRad(const Eigen::Matrix3d &R_a, const Eigen::Matrix3d &R_b)
+{
+    Eigen::Quaterniond q_rel(R_a.transpose() * R_b);
+    q_rel.normalize();
+    const double w = std::clamp(std::abs(q_rel.w()), 0.0, 1.0);
+    return 2.0 * std::acos(w);
+}
+
 } // namespace
 
 LocalizationModule::LocalizationModule(LocalizationConfig config)
@@ -216,6 +224,85 @@ std::vector<BufferedTagObservation> LocalizationModule::recentObservationsForSta
     return out;
 }
 
+std::optional<BootstrapEstimate> LocalizationModule::estimateBootstrap(
+    const rclcpp::Time &stamp,
+    const Eigen::Isometry3d &T_OB) const
+{
+    const auto observations = recentObservationsForStamp(stamp);
+    if (observations.empty())
+    {
+        return std::nullopt;
+    }
+
+    struct Hypothesis
+    {
+        Eigen::Isometry3d T_MO = Eigen::Isometry3d::Identity();
+        double score{0.0};
+    };
+
+    std::vector<Hypothesis> hypotheses;
+    hypotheses.reserve(observations.size());
+    for (const auto &observation : observations)
+    {
+        const auto mapped_it = mapped_tags_.find(observation.tag_id);
+        if (mapped_it == mapped_tags_.end())
+        {
+            continue;
+        }
+
+        Hypothesis h;
+        h.T_MO = mapped_it->second * observation.T_BT.inverse() * T_OB.inverse();
+        h.score = observation.decision_margin;
+        hypotheses.push_back(std::move(h));
+    }
+
+    if (hypotheses.empty())
+    {
+        return std::nullopt;
+    }
+
+    const double rot_threshold_rad = config_.cluster_rotation_deg * std::acos(-1.0) / 180.0;
+    size_t best_index = 0;
+    size_t best_support = 0;
+    double best_score = -1.0;
+    for (size_t i = 0; i < hypotheses.size(); ++i)
+    {
+        size_t support = 0;
+        double score = 0.0;
+        for (size_t j = 0; j < hypotheses.size(); ++j)
+        {
+            const double trans_error =
+                (hypotheses[i].T_MO.translation() - hypotheses[j].T_MO.translation()).norm();
+            const double rot_error =
+                rotationDistanceRad(hypotheses[i].T_MO.linear(), hypotheses[j].T_MO.linear());
+            if (trans_error <= config_.cluster_translation_m &&
+                rot_error <= rot_threshold_rad)
+            {
+                ++support;
+                score += hypotheses[j].score;
+            }
+        }
+
+        if (support > best_support || (support == best_support && score > best_score))
+        {
+            best_index = i;
+            best_support = support;
+            best_score = score;
+        }
+    }
+
+    if (best_support < config_.bootstrap_min_inliers)
+    {
+        return std::nullopt;
+    }
+
+    BootstrapEstimate estimate;
+    estimate.T_MO = hypotheses[best_index].T_MO;
+    estimate.support_count = best_support;
+    estimate.score = best_score;
+    return estimate;
+}
+
 size_t LocalizationModule::bufferedObservationCount() const noexcept
 {
     std::lock_guard<std::mutex> lk(tag_obs_mtx_);
@@ -258,7 +345,7 @@ bool LocalizationModule::isObliqueTagObservation_(const Eigen::Isometry3d &T_BT)
 
     const double pi = std::acos(-1.0);
     const double max_angle_rad = config_.max_tag_oblique_angle_deg * pi / 180.0;
-    const double min_abs_cosine = std::cos(std::clamp(max_angle_rad, 0.0, 0.5 * M_PI));
+    const double min_abs_cosine = std::cos(std::clamp(max_angle_rad, 0.0, 0.5 * pi));
     const Eigen::Vector3d tag_normal_body = T_BT.linear() * Eigen::Vector3d::UnitZ();
     const double normal_norm = tag_normal_body.norm();
     if (!std::isfinite(normal_norm) || normal_norm <= 1e-6)

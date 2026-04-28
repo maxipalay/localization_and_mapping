@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -77,6 +78,13 @@ struct TagIngestReport
     size_t buffered{0};
 };
 
+struct BootstrapEstimate
+{
+    Eigen::Isometry3d T_MO = Eigen::Isometry3d::Identity();
+    size_t support_count{0};
+    double score{0.0};
+};
+
 class LocalizationModule
 {
 public:
@@ -88,6 +96,9 @@ public:
         const std::string &body_frame_id,
         tf2_ros::Buffer &tf_buffer) const;
     std::vector<BufferedTagObservation> recentObservationsForStamp(const rclcpp::Time &stamp) const;
+    std::optional<BootstrapEstimate> estimateBootstrap(
+        const rclcpp::Time &stamp,
+        const Eigen::Isometry3d &T_OB) const;
     size_t bufferedObservationCount() const noexcept;
 
     const LocalizationConfig &config() const noexcept;
