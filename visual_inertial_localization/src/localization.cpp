@@ -36,6 +36,16 @@ double rotationDistanceRad(const Eigen::Matrix3d &R_a, const Eigen::Matrix3d &R_
     return 2.0 * std::acos(w);
 }
 
+double poseTranslationDistance(const Eigen::Isometry3d &T_a, const Eigen::Isometry3d &T_b)
+{
+    return (T_a.translation() - T_b.translation()).norm();
+}
+
+double poseRotationDistanceRad(const Eigen::Isometry3d &T_a, const Eigen::Isometry3d &T_b)
+{
+    return rotationDistanceRad(T_a.linear(), T_b.linear());
+}
+
 } // namespace
 
 LocalizationModule::LocalizationModule(LocalizationConfig config)
@@ -117,6 +127,7 @@ LocalizationLoadReport LocalizationModule::loadTagMap()
 TagIngestReport LocalizationModule::ingestDetections(
     const apriltag_msgs::msg::AprilTagDetectionArray &msg,
     const std::string &body_frame_id,
+    const std::string &odom_frame_id,
     tf2_ros::Buffer &tf_buffer) const
 {
     TagIngestReport report;
@@ -133,66 +144,98 @@ TagIngestReport LocalizationModule::ingestDetections(
     const auto lookup_timeout =
         rclcpp::Duration::from_seconds(config_.tag_tf_lookup_timeout_ms / 1000.0);
 
-    std::lock_guard<std::mutex> lk(tag_obs_mtx_);
-    for (const auto &detection : msg.detections)
     {
-        if (mapped_tags_.find(static_cast<int>(detection.id)) == mapped_tags_.end())
+        std::lock_guard<std::mutex> lk(tag_obs_mtx_);
+        for (const auto &detection : msg.detections)
         {
-            ++report.skipped_unmapped;
-            continue;
-        }
-        if (detection.hamming > config_.max_tag_hamming)
-        {
-            ++report.skipped_hamming;
-            continue;
-        }
-        if (detection.decision_margin < config_.min_tag_decision_margin)
-        {
-            ++report.skipped_margin;
-            continue;
+            if (mapped_tags_.find(static_cast<int>(detection.id)) == mapped_tags_.end())
+            {
+                ++report.skipped_unmapped;
+                continue;
+            }
+            if (detection.hamming > config_.max_tag_hamming)
+            {
+                ++report.skipped_hamming;
+                continue;
+            }
+            if (detection.decision_margin < config_.min_tag_decision_margin)
+            {
+                ++report.skipped_margin;
+                continue;
+            }
+
+            try
+            {
+                const auto tf = tf_buffer.lookupTransform(
+                    body_frame_id,
+                    tagFrameName_(detection),
+                    lookup_time,
+                    lookup_timeout);
+                const Eigen::Isometry3d T_BT = transformMsgToIso(tf.transform);
+                const double range_m = T_BT.translation().norm();
+                if (config_.max_tag_range_m > 0.0 &&
+                    std::isfinite(range_m) &&
+                    range_m > config_.max_tag_range_m)
+                {
+                    ++report.skipped_range;
+                    continue;
+                }
+                if (isObliqueTagObservation_(T_BT))
+                {
+                    ++report.skipped_oblique;
+                    continue;
+                }
+
+                BufferedTagObservation observation;
+                observation.stamp_ns = stamp_ns;
+                observation.tag_id = static_cast<int>(detection.id);
+                observation.family = detection.family;
+                observation.T_BT = T_BT;
+                observation.decision_margin = detection.decision_margin;
+                observation.goodness = detection.goodness;
+                observation.hamming = detection.hamming;
+                tag_observation_buffer_.push_back(std::move(observation));
+                ++report.accepted;
+            }
+            catch (const tf2::TransformException &)
+            {
+                ++report.skipped_tf_lookup;
+            }
         }
 
+        pruneBufferedTagObservationsLocked_(stamp_ns);
+        report.buffered = tag_observation_buffer_.size();
+    }
+
+    if (report.accepted > 0)
+    {
         try
         {
-            const auto tf = tf_buffer.lookupTransform(
+            const auto tf_odom_body = tf_buffer.lookupTransform(
+                odom_frame_id,
                 body_frame_id,
-                tagFrameName_(detection),
                 lookup_time,
                 lookup_timeout);
-            const Eigen::Isometry3d T_BT = transformMsgToIso(tf.transform);
-            const double range_m = T_BT.translation().norm();
-            if (config_.max_tag_range_m > 0.0 &&
-                std::isfinite(range_m) &&
-                range_m > config_.max_tag_range_m)
+            const Eigen::Isometry3d T_OB = transformMsgToIso(tf_odom_body.transform);
+            const auto observations = recentObservationsForStamp(lookup_time);
+            const auto hypotheses = buildPoseHypotheses_(observations);
+            const auto cluster_indices = dominantHypothesisCluster_(hypotheses);
+            if (!cluster_indices.empty())
             {
-                ++report.skipped_range;
-                continue;
+                const size_t best_index = bestHypothesisIndex_(hypotheses, cluster_indices);
+                const Eigen::Isometry3d T_MO = hypotheses[best_index].T_MB * T_OB.inverse();
+                updateStableCorrection_(
+                    stamp_ns,
+                    T_MO,
+                    hypotheses[best_index].score,
+                    cluster_indices.size());
             }
-            if (isObliqueTagObservation_(T_BT))
-            {
-                ++report.skipped_oblique;
-                continue;
-            }
-
-            BufferedTagObservation observation;
-            observation.stamp_ns = stamp_ns;
-            observation.tag_id = static_cast<int>(detection.id);
-            observation.family = detection.family;
-            observation.T_BT = T_BT;
-            observation.decision_margin = detection.decision_margin;
-            observation.goodness = detection.goodness;
-            observation.hamming = detection.hamming;
-            tag_observation_buffer_.push_back(std::move(observation));
-            ++report.accepted;
         }
         catch (const tf2::TransformException &)
         {
-            ++report.skipped_tf_lookup;
         }
     }
 
-    pruneBufferedTagObservationsLocked_(stamp_ns);
-    report.buffered = tag_observation_buffer_.size();
     return report;
 }
 
@@ -228,19 +271,29 @@ std::optional<BootstrapEstimate> LocalizationModule::estimateBootstrap(
     const rclcpp::Time &stamp,
     const Eigen::Isometry3d &T_OB) const
 {
+    const auto stable_correction = estimateStableCorrection(stamp);
+    if (stable_correction.has_value())
+    {
+        BootstrapEstimate estimate;
+        estimate.T_MO = stable_correction->T_MO;
+        estimate.support_count = stable_correction->support_count;
+        estimate.score = stable_correction->score;
+        return estimate;
+    }
+
     const auto observations = recentObservationsForStamp(stamp);
     if (observations.empty())
     {
         return std::nullopt;
     }
 
-    struct Hypothesis
+    struct CorrectionHypothesis
     {
         Eigen::Isometry3d T_MO = Eigen::Isometry3d::Identity();
         double score{0.0};
     };
 
-    std::vector<Hypothesis> hypotheses;
+    std::vector<CorrectionHypothesis> hypotheses;
     hypotheses.reserve(observations.size());
     for (const auto &observation : observations)
     {
@@ -250,7 +303,7 @@ std::optional<BootstrapEstimate> LocalizationModule::estimateBootstrap(
             continue;
         }
 
-        Hypothesis h;
+        CorrectionHypothesis h;
         h.T_MO = mapped_it->second * observation.T_BT.inverse() * T_OB.inverse();
         h.score = observation.decision_margin;
         hypotheses.push_back(std::move(h));
@@ -306,78 +359,37 @@ std::optional<BootstrapEstimate> LocalizationModule::estimateBootstrap(
 std::optional<PosePriorEstimate> LocalizationModule::estimatePosePrior(const rclcpp::Time &stamp) const
 {
     const auto observations = recentObservationsForStamp(stamp);
-    if (observations.empty())
-    {
-        return std::nullopt;
-    }
-
-    struct Hypothesis
-    {
-        Eigen::Isometry3d T_MB = Eigen::Isometry3d::Identity();
-        double score{0.0};
-    };
-
-    std::vector<Hypothesis> hypotheses;
-    hypotheses.reserve(observations.size());
-    for (const auto &observation : observations)
-    {
-        const auto mapped_it = mapped_tags_.find(observation.tag_id);
-        if (mapped_it == mapped_tags_.end())
-        {
-            continue;
-        }
-
-        Hypothesis h;
-        h.T_MB = mapped_it->second * observation.T_BT.inverse();
-        h.score = observation.decision_margin;
-        hypotheses.push_back(std::move(h));
-    }
-
+    const auto hypotheses = buildPoseHypotheses_(observations);
     if (hypotheses.empty())
     {
         return std::nullopt;
     }
 
-    const double rot_threshold_rad = config_.cluster_rotation_deg * std::acos(-1.0) / 180.0;
-    size_t best_index = 0;
-    size_t best_support = 0;
-    double best_score = -1.0;
-    for (size_t i = 0; i < hypotheses.size(); ++i)
-    {
-        size_t support = 0;
-        double score = 0.0;
-        for (size_t j = 0; j < hypotheses.size(); ++j)
-        {
-            const double trans_error =
-                (hypotheses[i].T_MB.translation() - hypotheses[j].T_MB.translation()).norm();
-            const double rot_error =
-                rotationDistanceRad(hypotheses[i].T_MB.linear(), hypotheses[j].T_MB.linear());
-            if (trans_error <= config_.cluster_translation_m &&
-                rot_error <= rot_threshold_rad)
-            {
-                ++support;
-                score += hypotheses[j].score;
-            }
-        }
-
-        if (support > best_support || (support == best_support && score > best_score))
-        {
-            best_index = i;
-            best_support = support;
-            best_score = score;
-        }
-    }
-
-    if (best_support < config_.bootstrap_min_inliers)
+    const auto cluster_indices = dominantHypothesisCluster_(hypotheses);
+    if (cluster_indices.size() < config_.bootstrap_min_inliers)
     {
         return std::nullopt;
     }
 
+    const size_t best_index = bestHypothesisIndex_(hypotheses, cluster_indices);
+    double best_score = 0.0;
+    for (const size_t idx : cluster_indices)
+    {
+        best_score += hypotheses[idx].score;
+    }
+
     PosePriorEstimate estimate;
     estimate.T_MB = hypotheses[best_index].T_MB;
-    estimate.support_count = best_support;
+    estimate.support_count = cluster_indices.size();
     estimate.score = best_score;
     return estimate;
+}
+
+std::optional<StableCorrectionEstimate> LocalizationModule::estimateStableCorrection(const rclcpp::Time &stamp) const
+{
+    std::lock_guard<std::mutex> lk(stable_correction_mtx_);
+    pruneTemporalCorrectionHypothesesLocked_(stamp.nanoseconds());
+    return computeStableCorrectionLocked_();
 }
 
 size_t LocalizationModule::bufferedObservationCount() const noexcept
@@ -453,6 +465,195 @@ void LocalizationModule::pruneBufferedTagObservationsLocked_(int64_t newest_stam
         }
         tag_observation_buffer_.pop_front();
     }
+}
+
+std::vector<LocalizationModule::PoseHypothesis> LocalizationModule::buildPoseHypotheses_(
+    const std::vector<BufferedTagObservation> &observations) const
+{
+    std::vector<PoseHypothesis> hypotheses;
+    hypotheses.reserve(observations.size());
+    for (const auto &observation : observations)
+    {
+        const auto mapped_it = mapped_tags_.find(observation.tag_id);
+        if (mapped_it == mapped_tags_.end())
+        {
+            continue;
+        }
+
+        PoseHypothesis h;
+        h.tag_id = observation.tag_id;
+        h.stamp_ns = observation.stamp_ns;
+        h.T_MB = mapped_it->second * observation.T_BT.inverse();
+        h.score = observation.decision_margin + 0.1 * observation.goodness;
+        h.decision_margin = observation.decision_margin;
+        hypotheses.push_back(std::move(h));
+    }
+    return hypotheses;
+}
+
+std::vector<size_t> LocalizationModule::dominantHypothesisCluster_(
+    const std::vector<PoseHypothesis> &hypotheses) const
+{
+    std::vector<size_t> best_cluster;
+    const double rot_threshold_rad = config_.cluster_rotation_deg * std::acos(-1.0) / 180.0;
+    double best_score = -1.0;
+
+    for (size_t i = 0; i < hypotheses.size(); ++i)
+    {
+        std::vector<size_t> cluster;
+        double cluster_score = 0.0;
+        for (size_t j = 0; j < hypotheses.size(); ++j)
+        {
+            if (poseTranslationDistance(hypotheses[i].T_MB, hypotheses[j].T_MB) >
+                config_.cluster_translation_m)
+            {
+                continue;
+            }
+            if (poseRotationDistanceRad(hypotheses[i].T_MB, hypotheses[j].T_MB) >
+                rot_threshold_rad)
+            {
+                continue;
+            }
+            cluster.push_back(j);
+            cluster_score += hypotheses[j].score;
+        }
+
+        if (cluster.size() > best_cluster.size() ||
+            (cluster.size() == best_cluster.size() && cluster_score > best_score))
+        {
+            best_score = cluster_score;
+            best_cluster = std::move(cluster);
+        }
+    }
+
+    return best_cluster;
+}
+
+size_t LocalizationModule::bestHypothesisIndex_(
+    const std::vector<PoseHypothesis> &hypotheses,
+    const std::vector<size_t> &cluster_indices) const
+{
+    size_t best_index = cluster_indices.front();
+    for (const size_t idx : cluster_indices)
+    {
+        if (hypotheses[idx].score > hypotheses[best_index].score)
+        {
+            best_index = idx;
+        }
+    }
+    return best_index;
+}
+
+void LocalizationModule::pruneTemporalCorrectionHypothesesLocked_(int64_t newest_stamp_ns) const
+{
+    if (config_.stable_hypothesis_age_s <= 0.0)
+    {
+        stable_correction_buffer_.clear();
+        return;
+    }
+
+    const int64_t max_age_ns = static_cast<int64_t>(config_.stable_hypothesis_age_s * 1e9);
+    while (!stable_correction_buffer_.empty())
+    {
+        const auto &front = stable_correction_buffer_.front();
+        if ((newest_stamp_ns - front.stamp_ns) <= max_age_ns)
+        {
+            break;
+        }
+        stable_correction_buffer_.pop_front();
+    }
+}
+
+std::optional<StableCorrectionEstimate> LocalizationModule::computeStableCorrectionLocked_() const
+{
+    if (stable_correction_buffer_.size() < config_.stable_min_frames)
+    {
+        return std::nullopt;
+    }
+
+    const double rot_threshold_rad = config_.stable_rotation_deg * std::acos(-1.0) / 180.0;
+    std::vector<size_t> best_cluster;
+    double best_score = -1.0;
+    for (size_t i = 0; i < stable_correction_buffer_.size(); ++i)
+    {
+        std::vector<size_t> cluster;
+        double cluster_score = 0.0;
+        for (size_t j = 0; j < stable_correction_buffer_.size(); ++j)
+        {
+            if (poseTranslationDistance(
+                    stable_correction_buffer_[i].T_MO,
+                    stable_correction_buffer_[j].T_MO) > config_.stable_translation_m)
+            {
+                continue;
+            }
+            if (poseRotationDistanceRad(
+                    stable_correction_buffer_[i].T_MO,
+                    stable_correction_buffer_[j].T_MO) > rot_threshold_rad)
+            {
+                continue;
+            }
+            cluster.push_back(j);
+            cluster_score += stable_correction_buffer_[j].score;
+        }
+
+        if (cluster.size() > best_cluster.size() ||
+            (cluster.size() == best_cluster.size() && cluster_score > best_score))
+        {
+            best_score = cluster_score;
+            best_cluster = std::move(cluster);
+        }
+    }
+
+    if (best_cluster.size() < config_.stable_min_frames)
+    {
+        return std::nullopt;
+    }
+
+    size_t best_index = best_cluster.front();
+    size_t max_support_count = 0;
+    for (const size_t idx : best_cluster)
+    {
+        if (stable_correction_buffer_[idx].score > stable_correction_buffer_[best_index].score)
+        {
+            best_index = idx;
+        }
+        max_support_count = std::max(max_support_count, stable_correction_buffer_[idx].support_count);
+    }
+
+    StableCorrectionEstimate out;
+    out.T_MO = stable_correction_buffer_[best_index].T_MO;
+    out.score = stable_correction_buffer_[best_index].score;
+    out.frame_support = best_cluster.size();
+    out.support_count = max_support_count;
+    return out;
+}
+
+std::optional<StableCorrectionEstimate> LocalizationModule::updateStableCorrection_(
+    int64_t stamp_ns,
+    const Eigen::Isometry3d &T_MO,
+    double score,
+    size_t support_count) const
+{
+    std::lock_guard<std::mutex> lk(stable_correction_mtx_);
+
+    TemporalCorrectionHypothesis hypothesis;
+    hypothesis.stamp_ns = stamp_ns;
+    hypothesis.T_MO = T_MO;
+    hypothesis.score = score;
+    hypothesis.support_count = support_count;
+
+    if (!stable_correction_buffer_.empty() &&
+        stable_correction_buffer_.back().stamp_ns == stamp_ns)
+    {
+        stable_correction_buffer_.back() = std::move(hypothesis);
+    }
+    else
+    {
+        stable_correction_buffer_.push_back(std::move(hypothesis));
+    }
+
+    pruneTemporalCorrectionHypothesesLocked_(stamp_ns);
+    return computeStableCorrectionLocked_();
 }
 
 } // namespace visual_inertial_localization

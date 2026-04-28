@@ -106,6 +106,23 @@ namespace
         return T;
     }
 
+    static double poseTranslationDistance(
+        const Eigen::Isometry3d &T_a,
+        const Eigen::Isometry3d &T_b)
+    {
+        return (T_a.translation() - T_b.translation()).norm();
+    }
+
+    static double poseRotationDistanceRad(
+        const Eigen::Isometry3d &T_a,
+        const Eigen::Isometry3d &T_b)
+    {
+        Eigen::Quaterniond q_rel(T_a.linear().transpose() * T_b.linear());
+        q_rel.normalize();
+        const double w = std::clamp(std::abs(q_rel.w()), 0.0, 1.0);
+        return 2.0 * std::acos(w);
+    }
+
     static KeyframeEvent toKeyframeEvent(const visual_inertial::msg::Keyframe &msg)
     {
         KeyframeEvent ev;
@@ -769,16 +786,69 @@ private:
             std::optional<AbsolutePosePrior> absolute_pose_prior = std::nullopt;
             if (localization_mode_ && localization_bootstrapped_ && localization_)
             {
-                const auto pose_prior_estimate =
-                    localization_->estimatePosePrior(rclcpp::Time(msg.header.stamp));
-                if (pose_prior_estimate.has_value())
+                const auto kf_stamp = rclcpp::Time(msg.header.stamp);
+                const auto stable_correction = localization_->estimateStableCorrection(kf_stamp);
+                bool used_stable_correction = false;
+
+                if (stable_correction.has_value())
                 {
-                    AbsolutePosePrior prior;
-                    prior.T_WB = pose_prior_estimate->T_MB;
-                    prior.rot_sigma_rad = localization_->config().pose_prior_rot_sigma_rad;
-                    prior.trans_sigma_m = localization_->config().pose_prior_trans_sigma_m;
-                    prior.huber_k = localization_->config().pose_prior_huber_k;
-                    absolute_pose_prior = std::move(prior);
+                    const double relocalize_rotation_thresh_rad =
+                        localization_->config().relocalize_rotation_deg * M_PI / 180.0;
+                    const double tracking_deadband_rotation_thresh_rad =
+                        localization_->config().tracking_deadband_rotation_deg * M_PI / 180.0;
+                    const double translation_error_m =
+                        poseTranslationDistance(localization_T_map_odom_, stable_correction->T_MO);
+                    const double rotation_error_rad =
+                        poseRotationDistanceRad(localization_T_map_odom_, stable_correction->T_MO);
+
+                    if (translation_error_m > localization_->config().relocalize_translation_m ||
+                        rotation_error_rad > relocalize_rotation_thresh_rad)
+                    {
+                        opt->reset();
+                        localization_T_map_odom_ = stable_correction->T_MO;
+                        ev_for_optimization.T_OB = localization_T_map_odom_ * ev.T_OB;
+
+                        RCLCPP_INFO(
+                            get_logger(),
+                            "Localization graph reset for relocalization at incoming kf_id=%lu",
+                            static_cast<unsigned long>(ev.kf_id));
+
+                        RCLCPP_WARN_THROTTLE(
+                            get_logger(), *get_clock(), 2000,
+                            "Localization relocalization trigger: stable_frames=%zu support=%zu map_odom_trans_error=%.3f m map_odom_rot_error=%.1f deg",
+                            stable_correction->frame_support,
+                            stable_correction->support_count,
+                            translation_error_m,
+                            rotation_error_rad * 180.0 / M_PI);
+                    }
+
+                    if (translation_error_m > localization_->config().tracking_deadband_translation_m ||
+                        rotation_error_rad > tracking_deadband_rotation_thresh_rad)
+                    {
+                        AbsolutePosePrior prior;
+                        prior.T_WB = stable_correction->T_MO * ev.T_OB;
+                        prior.rot_sigma_rad = localization_->config().pose_prior_rot_sigma_rad;
+                        prior.trans_sigma_m = localization_->config().pose_prior_trans_sigma_m;
+                        prior.huber_k = localization_->config().pose_prior_huber_k;
+                        absolute_pose_prior = std::move(prior);
+                    }
+
+                    used_stable_correction = true;
+                }
+
+                if (!used_stable_correction)
+                {
+                    const auto pose_prior_estimate =
+                        localization_->estimatePosePrior(kf_stamp);
+                    if (pose_prior_estimate.has_value())
+                    {
+                        AbsolutePosePrior prior;
+                        prior.T_WB = pose_prior_estimate->T_MB;
+                        prior.rot_sigma_rad = localization_->config().pose_prior_rot_sigma_rad;
+                        prior.trans_sigma_m = localization_->config().pose_prior_trans_sigma_m;
+                        prior.huber_k = localization_->config().pose_prior_huber_k;
+                        absolute_pose_prior = std::move(prior);
+                    }
                 }
             }
 
@@ -1025,11 +1095,14 @@ private:
             return;
         }
 
-        const auto report = localization_->ingestDetections(*msg, body_frame_id_, *tf_buffer_);
+        const auto report = localization_->ingestDetections(
+            *msg, body_frame_id_, odom_frame_id_, *tf_buffer_);
+        const auto stable_correction =
+            localization_->estimateStableCorrection(rclcpp::Time(msg->header.stamp));
         RCLCPP_INFO_THROTTLE(
             get_logger(), *get_clock(), 2000,
             "Localization tag ingest: detections=%zu accepted=%zu skipped_unmapped=%zu "
-            "skipped_hamming=%zu skipped_margin=%zu skipped_tf=%zu skipped_range=%zu skipped_oblique=%zu buffered=%zu",
+            "skipped_hamming=%zu skipped_margin=%zu skipped_tf=%zu skipped_range=%zu skipped_oblique=%zu buffered=%zu stable_frames=%zu stable_support=%zu",
             report.total_detections,
             report.accepted,
             report.skipped_unmapped,
@@ -1038,7 +1111,9 @@ private:
             report.skipped_tf_lookup,
             report.skipped_range,
             report.skipped_oblique,
-            report.buffered);
+            report.buffered,
+            stable_correction.has_value() ? stable_correction->frame_support : 0,
+            stable_correction.has_value() ? stable_correction->support_count : 0);
     }
 
 private:
