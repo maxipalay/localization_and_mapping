@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(apriltag_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(OpenCV REQUIRED)
@@ -38,7 +39,7 @@ ament_target_dependencies(tracks_viz_node
   rclcpp sensor_msgs cv_bridge image_transport OpenCV)
 
 ament_target_dependencies(optimization_node
-  rclcpp sensor_msgs visual_inertial_common visual_inertial_optimization tf2_ros)
+  apriltag_msgs rclcpp sensor_msgs visual_inertial_common visual_inertial_optimization tf2_ros)
 
 ament_target_dependencies(path_viz_node
   rclcpp nav_msgs geometry_msgs tf2 tf2_ros)

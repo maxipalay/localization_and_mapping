@@ -1,5 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 
+#include <apriltag_msgs/msg/april_tag_detection_array.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2_ros/transform_broadcaster.h>
@@ -416,6 +417,7 @@ public:
         // -------- QoS --------
         auto kf_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
         auto info_qos = rclcpp::SensorDataQoS();
+        auto tag_qos = rclcpp::SensorDataQoS();
 
         // -------- Subscriptions: CameraInfo --------
         left_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
@@ -435,6 +437,17 @@ public:
                 right_info_ = *msg;
                 maybeInitRigAndOptimizer_();
             });
+
+        if (localization_mode_ && localization_)
+        {
+            tag_sub_ = create_subscription<apriltag_msgs::msg::AprilTagDetectionArray>(
+                localization_->config().tag_topic,
+                tag_qos,
+                [this](apriltag_msgs::msg::AprilTagDetectionArray::SharedPtr msg)
+                {
+                    this->onTagDetections_(std::move(msg));
+                });
+        }
 
         // -------- Subscription: Keyframes --------
         kf_sub_ = create_subscription<visual_inertial::msg::Keyframe>(
@@ -956,6 +969,29 @@ private:
         lm_pub_->publish(msg);
     }
 
+    void onTagDetections_(apriltag_msgs::msg::AprilTagDetectionArray::SharedPtr msg)
+    {
+        if (!localization_mode_ || !localization_ || !tf_buffer_ || !msg)
+        {
+            return;
+        }
+
+        const auto report = localization_->ingestDetections(*msg, body_frame_id_, *tf_buffer_);
+        RCLCPP_INFO_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Localization tag ingest: detections=%zu accepted=%zu skipped_unmapped=%zu "
+            "skipped_hamming=%zu skipped_margin=%zu skipped_tf=%zu skipped_range=%zu skipped_oblique=%zu buffered=%zu",
+            report.total_detections,
+            report.accepted,
+            report.skipped_unmapped,
+            report.skipped_hamming,
+            report.skipped_margin,
+            report.skipped_tf_lookup,
+            report.skipped_range,
+            report.skipped_oblique,
+            report.buffered);
+    }
+
 private:
     // Topics / frames
     std::string keyframe_topic_;
@@ -973,6 +1009,7 @@ private:
 
     // Subscriptions
     rclcpp::Subscription<visual_inertial::msg::Keyframe>::SharedPtr kf_sub_;
+    rclcpp::Subscription<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_sub_;
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_sub_;
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_sub_;
 

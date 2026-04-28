@@ -7,9 +7,12 @@ list(APPEND CMAKE_INSTALL_RPATH "/usr/local/lib")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 find_package(ament_cmake REQUIRED)
+find_package(apriltag_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED NO_MODULE)
+find_package(tf2_ros REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
@@ -17,7 +20,10 @@ add_library(${PROJECT_NAME} SHARED
 )
 
 ament_target_dependencies(${PROJECT_NAME}
+  apriltag_msgs
+  geometry_msgs
   rclcpp
+  tf2_ros
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -48,6 +54,6 @@ install(
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
-ament_export_dependencies(rclcpp yaml-cpp Eigen3)
+ament_export_dependencies(apriltag_msgs geometry_msgs rclcpp tf2_ros yaml-cpp Eigen3)
 
 ament_package()

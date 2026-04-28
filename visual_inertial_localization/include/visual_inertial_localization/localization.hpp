@@ -1,8 +1,15 @@
 #pragma once
 
+#include <apriltag_msgs/msg/april_tag_detection.hpp>
+#include <apriltag_msgs/msg/april_tag_detection_array.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <tf2_ros/buffer.h>
+
 #include <Eigen/Geometry>
 
 #include <cstddef>
+#include <deque>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -46,19 +53,55 @@ struct LocalizationLoadReport
     size_t frame_override_count{0};
 };
 
+struct BufferedTagObservation
+{
+    int64_t stamp_ns{0};
+    int tag_id{0};
+    std::string family;
+    Eigen::Isometry3d T_BT = Eigen::Isometry3d::Identity();
+    double decision_margin{0.0};
+    double goodness{0.0};
+    int hamming{0};
+};
+
+struct TagIngestReport
+{
+    size_t total_detections{0};
+    size_t accepted{0};
+    size_t skipped_unmapped{0};
+    size_t skipped_hamming{0};
+    size_t skipped_margin{0};
+    size_t skipped_tf_lookup{0};
+    size_t skipped_range{0};
+    size_t skipped_oblique{0};
+    size_t buffered{0};
+};
+
 class LocalizationModule
 {
 public:
     explicit LocalizationModule(LocalizationConfig config);
 
     LocalizationLoadReport loadTagMap();
+    TagIngestReport ingestDetections(
+        const apriltag_msgs::msg::AprilTagDetectionArray &msg,
+        const std::string &body_frame_id,
+        tf2_ros::Buffer &tf_buffer) const;
+    std::vector<BufferedTagObservation> recentObservationsForStamp(const rclcpp::Time &stamp) const;
+    size_t bufferedObservationCount() const noexcept;
 
     const LocalizationConfig &config() const noexcept;
     const std::unordered_map<int, Eigen::Isometry3d> &mappedTags() const noexcept;
 
 private:
+    std::string tagFrameName_(const apriltag_msgs::msg::AprilTagDetection &detection) const;
+    bool isObliqueTagObservation_(const Eigen::Isometry3d &T_BT) const;
+    void pruneBufferedTagObservationsLocked_(int64_t newest_stamp_ns) const;
+
     LocalizationConfig config_;
     std::unordered_map<int, Eigen::Isometry3d> mapped_tags_;
+    mutable std::mutex tag_obs_mtx_;
+    mutable std::deque<BufferedTagObservation> tag_observation_buffer_;
 };
 
 } // namespace visual_inertial_localization
