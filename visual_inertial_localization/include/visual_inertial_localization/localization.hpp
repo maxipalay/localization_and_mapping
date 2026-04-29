@@ -7,6 +7,7 @@
 
 #include <Eigen/Geometry>
 
+#include <atomic>
 #include <cstddef>
 #include <deque>
 #include <mutex>
@@ -165,6 +166,7 @@ private:
     mutable std::deque<BufferedTagObservation> tag_observation_buffer_;
     mutable std::mutex stable_correction_mtx_;
     mutable std::deque<TemporalCorrectionHypothesis> stable_correction_buffer_;
+    mutable std::atomic<int64_t> last_tag_message_stamp_ns_{0};
 };
 
 } // namespace visual_inertial_localization

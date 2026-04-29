@@ -141,6 +141,7 @@ TagIngestReport LocalizationModule::ingestDetections(
     const int64_t stamp_ns =
         (static_cast<int64_t>(msg.header.stamp.sec) * 1000000000LL) +
         static_cast<int64_t>(msg.header.stamp.nanosec);
+    last_tag_message_stamp_ns_.store(stamp_ns);
     const auto lookup_time = rclcpp::Time(msg.header.stamp);
     const auto lookup_timeout =
         rclcpp::Duration::from_seconds(config_.tag_tf_lookup_timeout_ms / 1000.0);
@@ -417,7 +418,29 @@ std::vector<PosePriorEstimate> LocalizationModule::estimatePosePriors(const rclc
 std::optional<StableCorrectionEstimate> LocalizationModule::estimateStableCorrection(const rclcpp::Time &stamp) const
 {
     std::lock_guard<std::mutex> lk(stable_correction_mtx_);
-    pruneTemporalCorrectionHypothesesLocked_(stamp.nanoseconds());
+    const int64_t stamp_ns = stamp.nanoseconds();
+    pruneTemporalCorrectionHypothesesLocked_(stamp_ns);
+    if (stable_correction_buffer_.empty())
+    {
+        return std::nullopt;
+    }
+
+    const int64_t newest_correction_stamp_ns = stable_correction_buffer_.back().stamp_ns;
+    const int64_t last_tag_message_stamp_ns = last_tag_message_stamp_ns_.load();
+    if (last_tag_message_stamp_ns > newest_correction_stamp_ns)
+    {
+        return std::nullopt;
+    }
+
+    if (config_.tag_max_age_s > 0.0)
+    {
+        const int64_t max_age_ns = static_cast<int64_t>(config_.tag_max_age_s * 1e9);
+        if ((stamp_ns - newest_correction_stamp_ns) > max_age_ns)
+        {
+            return std::nullopt;
+        }
+    }
+
     return computeStableCorrectionLocked_();
 }
 

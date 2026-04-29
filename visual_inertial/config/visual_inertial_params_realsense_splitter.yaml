@@ -111,7 +111,7 @@ visual_inertial_optimization:
     between_health_min_track_coverage: 0.2
     between_health_max_pnp_reproj_rmse_px: 3.0
     between_health_max_sigma_scale: 5.0
-    between_health_skip_quality: 0.05
+    between_health_skip_quality: 0.4
     use_imu: true
 
     init_landmarks_from_stereo: true

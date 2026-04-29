@@ -348,8 +348,27 @@ static bool shouldSkipVoBetweenInterval_(
     return false;
   }
 
-  // Only skip when the interval is both low-quality and effectively has no
-  // usable visual pose support. Otherwise keep a very loose between-factor.
+  return true;
+}
+
+static bool shouldSkipStereoForIntervalHealth_(
+    const FrontendIntervalHealth &health,
+    const OptimizationConfig &cfg,
+    double interval_quality)
+{
+  if (health.num_frames == 0)
+  {
+    return false;
+  }
+
+  if (interval_quality >= cfg.between_health_skip_quality)
+  {
+    return false;
+  }
+
+  // Keep current-frame stereo unless the interval has effectively no usable
+  // visual pose support at all. This avoids throwing away a salvageable
+  // keyframe just because the recent motion was rough.
   return health.num_pose_valid_frames == 0;
 }
 
@@ -612,7 +631,7 @@ std::optional<OptimizationResult> Optimizer::push(
     stereo_interval_quality = computeVoBetweenIntervalQuality_(kf.interval_health, cfg_);
     stereo_sigma_scale =
         1.0 + (1.0 - stereo_interval_quality) * std::max(0.0, cfg_.between_health_max_sigma_scale - 1.0);
-    skipped_stereo = shouldSkipVoBetweenInterval_(kf.interval_health, cfg_, stereo_interval_quality);
+    skipped_stereo = shouldSkipStereoForIntervalHealth_(kf.interval_health, cfg_, stereo_interval_quality);
   }
 
   auto stereoNoise = maybeHuberize_(
