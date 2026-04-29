@@ -116,6 +116,7 @@ public:
         const rclcpp::Time &stamp,
         const Eigen::Isometry3d &T_OB) const;
     std::optional<PosePriorEstimate> estimatePosePrior(const rclcpp::Time &stamp) const;
+    std::vector<PosePriorEstimate> estimatePosePriors(const rclcpp::Time &stamp) const;
     std::optional<StableCorrectionEstimate> estimateStableCorrection(const rclcpp::Time &stamp) const;
     size_t bufferedObservationCount() const noexcept;
 

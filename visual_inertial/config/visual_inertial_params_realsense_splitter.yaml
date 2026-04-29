@@ -131,7 +131,7 @@ visual_inertial_optimization:
     lm_fetch_max: 0
 
     # Localization mode inputs and tuning
-    localization_tag_map_path: ""
+    localization_tag_map_path: "/tmp/online_mapping_sessions/session_20260423_212723/offline_global_graph/optimized_tags.yaml"
     tag_topic: detections
     tag_tf_lookup_timeout_ms: 50.0
     localization_tag_max_age_s: 0.5
@@ -154,8 +154,8 @@ visual_inertial_optimization:
     localization_relocalize_rotation_deg: 8.0
     localization_tracking_deadband_translation_m: 0.05
     localization_tracking_deadband_rotation_deg: 2.0
-    tag_frame_ids: []
-    tag_frame_names: []
+    tag_frame_ids: [1]
+    tag_frame_names: ["base"]
 
 tracks_viz_node:
   ros__parameters:

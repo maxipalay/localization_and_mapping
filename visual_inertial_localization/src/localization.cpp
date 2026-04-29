@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <exception>
 #include <cmath>
+#include <unordered_set>
 #include <utility>
 
 namespace visual_inertial_localization
@@ -143,6 +144,8 @@ TagIngestReport LocalizationModule::ingestDetections(
     const auto lookup_time = rclcpp::Time(msg.header.stamp);
     const auto lookup_timeout =
         rclcpp::Duration::from_seconds(config_.tag_tf_lookup_timeout_ms / 1000.0);
+    std::vector<BufferedTagObservation> accepted_observations;
+    accepted_observations.reserve(msg.detections.size());
 
     {
         std::lock_guard<std::mutex> lk(tag_obs_mtx_);
@@ -194,6 +197,7 @@ TagIngestReport LocalizationModule::ingestDetections(
                 observation.decision_margin = detection.decision_margin;
                 observation.goodness = detection.goodness;
                 observation.hamming = detection.hamming;
+                accepted_observations.push_back(observation);
                 tag_observation_buffer_.push_back(std::move(observation));
                 ++report.accepted;
             }
@@ -207,7 +211,7 @@ TagIngestReport LocalizationModule::ingestDetections(
         report.buffered = tag_observation_buffer_.size();
     }
 
-    if (report.accepted > 0)
+    if (!accepted_observations.empty())
     {
         try
         {
@@ -217,8 +221,7 @@ TagIngestReport LocalizationModule::ingestDetections(
                 lookup_time,
                 lookup_timeout);
             const Eigen::Isometry3d T_OB = transformMsgToIso(tf_odom_body.transform);
-            const auto observations = recentObservationsForStamp(lookup_time);
-            const auto hypotheses = buildPoseHypotheses_(observations);
+            const auto hypotheses = buildPoseHypotheses_(accepted_observations);
             const auto cluster_indices = dominantHypothesisCluster_(hypotheses);
             if (!cluster_indices.empty())
             {
@@ -358,31 +361,57 @@ std::optional<BootstrapEstimate> LocalizationModule::estimateBootstrap(
 
 std::optional<PosePriorEstimate> LocalizationModule::estimatePosePrior(const rclcpp::Time &stamp) const
 {
+    const auto estimates = estimatePosePriors(stamp);
+    if (estimates.empty())
+    {
+        return std::nullopt;
+    }
+    return estimates.front();
+}
+
+std::vector<PosePriorEstimate> LocalizationModule::estimatePosePriors(const rclcpp::Time &stamp) const
+{
     const auto observations = recentObservationsForStamp(stamp);
     const auto hypotheses = buildPoseHypotheses_(observations);
     if (hypotheses.empty())
     {
-        return std::nullopt;
+        return {};
     }
 
     const auto cluster_indices = dominantHypothesisCluster_(hypotheses);
     if (cluster_indices.size() < config_.bootstrap_min_inliers)
     {
-        return std::nullopt;
+        return {};
     }
 
-    const size_t best_index = bestHypothesisIndex_(hypotheses, cluster_indices);
-    double best_score = 0.0;
-    for (const size_t idx : cluster_indices)
+    std::vector<size_t> ordered_indices = cluster_indices;
+    std::sort(
+        ordered_indices.begin(),
+        ordered_indices.end(),
+        [&hypotheses](size_t lhs, size_t rhs)
+        {
+            return hypotheses[lhs].score > hypotheses[rhs].score;
+        });
+
+    std::unordered_set<int> used_tag_ids;
+    std::vector<PosePriorEstimate> estimates;
+    estimates.reserve(ordered_indices.size());
+    for (const size_t idx : ordered_indices)
     {
-        best_score += hypotheses[idx].score;
+        const auto &hypothesis = hypotheses[idx];
+        if (!used_tag_ids.insert(hypothesis.tag_id).second)
+        {
+            continue;
+        }
+
+        PosePriorEstimate estimate;
+        estimate.T_MB = hypothesis.T_MB;
+        estimate.support_count = cluster_indices.size();
+        estimate.score = hypothesis.score;
+        estimates.push_back(std::move(estimate));
     }
 
-    PosePriorEstimate estimate;
-    estimate.T_MB = hypotheses[best_index].T_MB;
-    estimate.support_count = cluster_indices.size();
-    estimate.score = best_score;
-    return estimate;
+    return estimates;
 }
 
 std::optional<StableCorrectionEstimate> LocalizationModule::estimateStableCorrection(const rclcpp::Time &stamp) const

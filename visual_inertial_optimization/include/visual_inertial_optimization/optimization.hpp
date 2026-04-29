@@ -319,7 +319,9 @@ public:
     std::optional<OptimizationResult> push(
         const KeyframeEvent &kf,
         const std::optional<Eigen::Isometry3d> &T_Bkm1_Bk_meas = std::nullopt,
-        const std::optional<AbsolutePosePrior> &absolute_pose_prior = std::nullopt);
+        const std::vector<AbsolutePosePrior> &absolute_pose_priors = {},
+        const std::optional<Eigen::Isometry3d> &T_WB_init_override = std::nullopt,
+        const std::optional<Eigen::Isometry3d> &T_WB_anchor_override = std::nullopt);
 
     // Returns landmark estimates currently available in the smoother.
     // If max_points>0, returns up to max_points, preferring most-recently-seen.

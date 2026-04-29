@@ -392,12 +392,13 @@ public:
             const auto report = localization_->loadTagMap();
             if (localization_->config().tag_map_path.empty())
             {
-                RCLCPP_WARN(
+                RCLCPP_INFO(
                     get_logger(),
-                    "Localization mode selected but localization_tag_map_path is empty");
+                    "No tag priors were provided; running in pure odometry mode");
             }
             else if (report.ok)
             {
+                localization_use_tag_priors_ = true;
                 RCLCPP_INFO(
                     get_logger(),
                     "Localization tag map loaded from %s with %zu tags and %zu frame overrides",
@@ -412,6 +413,9 @@ public:
                     "Localization tag map could not be loaded from %s: %s",
                     localization_->config().tag_map_path.c_str(),
                     report.message.c_str());
+                RCLCPP_INFO(
+                    get_logger(),
+                    "No tag priors were provided; running in pure odometry mode");
             }
         }
 
@@ -748,15 +752,31 @@ private:
             }
 
             const auto ev = toKeyframeEvent(msg);
-            KeyframeEvent ev_for_optimization = ev;
-
-            if (localization_mode_ && localization_)
+            std::optional<Eigen::Isometry3d> between_meas = std::nullopt;
+            if (ev.has_vo_between)
             {
+                between_meas = ev.T_Bkm1_Bk;
+            }
+
+            std::vector<AbsolutePosePrior> absolute_pose_priors;
+            std::optional<Eigen::Isometry3d> T_WB_init_override = std::nullopt;
+            std::optional<Eigen::Isometry3d> T_WB_anchor_override = std::nullopt;
+            if (localization_mode_ && localization_ && localization_use_tag_priors_)
+            {
+                const auto kf_stamp = rclcpp::Time(msg.header.stamp);
+                auto make_prior = [this](const Eigen::Isometry3d &T_WB, bool robust)
+                {
+                    AbsolutePosePrior prior;
+                    prior.T_WB = T_WB;
+                    prior.rot_sigma_rad = localization_->config().pose_prior_rot_sigma_rad;
+                    prior.trans_sigma_m = localization_->config().pose_prior_trans_sigma_m;
+                    prior.huber_k = robust ? localization_->config().pose_prior_huber_k : 0.0;
+                    return prior;
+                };
+
                 if (!localization_bootstrapped_)
                 {
-                    const auto bootstrap = localization_->estimateBootstrap(
-                        rclcpp::Time(msg.header.stamp),
-                        ev.T_OB);
+                    const auto bootstrap = localization_->estimateBootstrap(kf_stamp, ev.T_OB);
                     if (!bootstrap.has_value())
                     {
                         RCLCPP_INFO_THROTTLE(
@@ -767,93 +787,108 @@ private:
 
                     localization_T_map_odom_ = bootstrap->T_MO;
                     localization_bootstrapped_ = true;
+                    T_WB_init_override = localization_T_map_odom_ * ev.T_OB;
+                    T_WB_anchor_override = T_WB_init_override;
+
+                    const auto pose_prior_estimates = localization_->estimatePosePriors(kf_stamp);
+                    for (const auto &estimate : pose_prior_estimates)
+                    {
+                        const bool robust =
+                            estimate.support_count < localization_->config().bootstrap_min_inliers;
+                        absolute_pose_priors.push_back(make_prior(estimate.T_MB, robust));
+                    }
+                    if (absolute_pose_priors.empty())
+                    {
+                        absolute_pose_priors.push_back(make_prior(*T_WB_anchor_override, false));
+                    }
+
                     RCLCPP_INFO(
                         get_logger(),
                         "Localization bootstrap established: support=%zu score=%.1f",
                         bootstrap->support_count,
                         bootstrap->score);
                 }
-
-                ev_for_optimization.T_OB = localization_T_map_odom_ * ev.T_OB;
-            }
-
-            std::optional<Eigen::Isometry3d> between_meas = std::nullopt;
-            if (ev_for_optimization.has_vo_between)
-            {
-                between_meas = ev_for_optimization.T_Bkm1_Bk;
-            }
-
-            std::optional<AbsolutePosePrior> absolute_pose_prior = std::nullopt;
-            if (localization_mode_ && localization_bootstrapped_ && localization_)
-            {
-                const auto kf_stamp = rclcpp::Time(msg.header.stamp);
-                const auto stable_correction = localization_->estimateStableCorrection(kf_stamp);
-                bool used_stable_correction = false;
-
-                if (stable_correction.has_value())
+                else
                 {
-                    const double relocalize_rotation_thresh_rad =
-                        localization_->config().relocalize_rotation_deg * M_PI / 180.0;
-                    const double tracking_deadband_rotation_thresh_rad =
-                        localization_->config().tracking_deadband_rotation_deg * M_PI / 180.0;
-                    const double translation_error_m =
-                        poseTranslationDistance(localization_T_map_odom_, stable_correction->T_MO);
-                    const double rotation_error_rad =
-                        poseRotationDistanceRad(localization_T_map_odom_, stable_correction->T_MO);
-
-                    if (translation_error_m > localization_->config().relocalize_translation_m ||
-                        rotation_error_rad > relocalize_rotation_thresh_rad)
-                    {
-                        opt->reset();
-                        localization_T_map_odom_ = stable_correction->T_MO;
-                        ev_for_optimization.T_OB = localization_T_map_odom_ * ev.T_OB;
-
-                        RCLCPP_INFO(
-                            get_logger(),
-                            "Localization graph reset for relocalization at incoming kf_id=%lu",
-                            static_cast<unsigned long>(ev.kf_id));
-
-                        RCLCPP_WARN_THROTTLE(
-                            get_logger(), *get_clock(), 2000,
-                            "Localization relocalization trigger: stable_frames=%zu support=%zu map_odom_trans_error=%.3f m map_odom_rot_error=%.1f deg",
-                            stable_correction->frame_support,
-                            stable_correction->support_count,
-                            translation_error_m,
-                            rotation_error_rad * 180.0 / M_PI);
-                    }
-
-                    if (translation_error_m > localization_->config().tracking_deadband_translation_m ||
-                        rotation_error_rad > tracking_deadband_rotation_thresh_rad)
-                    {
-                        AbsolutePosePrior prior;
-                        prior.T_WB = stable_correction->T_MO * ev.T_OB;
-                        prior.rot_sigma_rad = localization_->config().pose_prior_rot_sigma_rad;
-                        prior.trans_sigma_m = localization_->config().pose_prior_trans_sigma_m;
-                        prior.huber_k = localization_->config().pose_prior_huber_k;
-                        absolute_pose_prior = std::move(prior);
-                    }
-
-                    used_stable_correction = true;
+                    T_WB_init_override = localization_T_map_odom_ * ev.T_OB;
                 }
 
-                if (!used_stable_correction)
+                if (localization_bootstrapped_)
                 {
-                    const auto pose_prior_estimate =
-                        localization_->estimatePosePrior(kf_stamp);
-                    if (pose_prior_estimate.has_value())
+                    const auto stable_correction = localization_->estimateStableCorrection(kf_stamp);
+                    bool used_stable_correction = false;
+
+                    if (stable_correction.has_value())
                     {
-                        AbsolutePosePrior prior;
-                        prior.T_WB = pose_prior_estimate->T_MB;
-                        prior.rot_sigma_rad = localization_->config().pose_prior_rot_sigma_rad;
-                        prior.trans_sigma_m = localization_->config().pose_prior_trans_sigma_m;
-                        prior.huber_k = localization_->config().pose_prior_huber_k;
-                        absolute_pose_prior = std::move(prior);
+                        const double relocalize_rotation_thresh_rad =
+                            localization_->config().relocalize_rotation_deg * M_PI / 180.0;
+                        const double tracking_deadband_rotation_thresh_rad =
+                            localization_->config().tracking_deadband_rotation_deg * M_PI / 180.0;
+                        const double translation_error_m =
+                            poseTranslationDistance(localization_T_map_odom_, stable_correction->T_MO);
+                        const double rotation_error_rad =
+                            poseRotationDistanceRad(localization_T_map_odom_, stable_correction->T_MO);
+
+                        if (translation_error_m > localization_->config().relocalize_translation_m ||
+                            rotation_error_rad > relocalize_rotation_thresh_rad)
+                        {
+                            opt->reset();
+                            localization_T_map_odom_ = stable_correction->T_MO;
+                            T_WB_init_override = localization_T_map_odom_ * ev.T_OB;
+                            T_WB_anchor_override = T_WB_init_override;
+                            absolute_pose_priors.clear();
+                            absolute_pose_priors.push_back(make_prior(*T_WB_anchor_override, false));
+
+                            RCLCPP_INFO(
+                                get_logger(),
+                                "Localization graph reset for relocalization at incoming kf_id=%lu",
+                                static_cast<unsigned long>(ev.kf_id));
+
+                            RCLCPP_WARN_THROTTLE(
+                                get_logger(), *get_clock(), 2000,
+                                "Localization relocalization trigger: stable_frames=%zu support=%zu map_odom_trans_error=%.3f m map_odom_rot_error=%.1f deg",
+                                stable_correction->frame_support,
+                                stable_correction->support_count,
+                                translation_error_m,
+                                rotation_error_rad * 180.0 / M_PI);
+                        }
+                        else if (
+                            translation_error_m > localization_->config().tracking_deadband_translation_m ||
+                            rotation_error_rad > tracking_deadband_rotation_thresh_rad)
+                        {
+                            absolute_pose_priors.clear();
+                            absolute_pose_priors.push_back(
+                                make_prior(stable_correction->T_MO * ev.T_OB, true));
+                        }
+                        else
+                        {
+                            absolute_pose_priors.clear();
+                        }
+
+                        used_stable_correction = true;
+                    }
+
+                    if (!used_stable_correction)
+                    {
+                        absolute_pose_priors.clear();
+                        const auto pose_prior_estimates = localization_->estimatePosePriors(kf_stamp);
+                        for (const auto &estimate : pose_prior_estimates)
+                        {
+                            const bool robust =
+                                estimate.support_count < localization_->config().bootstrap_min_inliers;
+                            absolute_pose_priors.push_back(make_prior(estimate.T_MB, robust));
+                        }
                     }
                 }
             }
 
             const auto optimize_start = std::chrono::steady_clock::now();
-            const auto res = opt->push(ev_for_optimization, between_meas, absolute_pose_prior);
+            const auto res = opt->push(
+                ev,
+                between_meas,
+                absolute_pose_priors,
+                T_WB_init_override,
+                T_WB_anchor_override);
             const auto optimize_end = std::chrono::steady_clock::now();
             const double optimize_ms =
                 std::chrono::duration<double, std::milli>(optimize_end - optimize_start).count();
@@ -1090,7 +1125,7 @@ private:
 
     void onTagDetections_(apriltag_msgs::msg::AprilTagDetectionArray::SharedPtr msg)
     {
-        if (!localization_mode_ || !localization_ || !tf_buffer_ || !msg)
+        if (!localization_mode_ || !localization_ || !localization_use_tag_priors_ || !tf_buffer_ || !msg)
         {
             return;
         }
@@ -1126,6 +1161,7 @@ private:
     std::string odom_frame_id_;
     std::string operation_mode_{"mapping"};
     bool localization_mode_{false};
+    bool localization_use_tag_priors_{false};
     std::unique_ptr<visual_inertial_localization::LocalizationModule> localization_;
     bool localization_bootstrapped_{false};
     Eigen::Isometry3d localization_T_map_odom_ = Eigen::Isometry3d::Identity();
