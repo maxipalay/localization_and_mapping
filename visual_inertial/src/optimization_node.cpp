@@ -777,36 +777,38 @@ private:
                 if (!localization_bootstrapped_)
                 {
                     const auto bootstrap = localization_->estimateBootstrap(kf_stamp, ev.T_OB);
-                    if (!bootstrap.has_value())
+                    if (bootstrap.has_value())
+                    {
+                        opt->reset();
+                        localization_T_map_odom_ = bootstrap->T_MO;
+                        localization_bootstrapped_ = true;
+                        T_WB_init_override = localization_T_map_odom_ * ev.T_OB;
+                        T_WB_anchor_override = T_WB_init_override;
+
+                        const auto pose_prior_estimates = localization_->estimatePosePriors(kf_stamp);
+                        for (const auto &estimate : pose_prior_estimates)
+                        {
+                            const bool robust =
+                                estimate.support_count < localization_->config().bootstrap_min_inliers;
+                            absolute_pose_priors.push_back(make_prior(estimate.T_MB, robust));
+                        }
+                        if (absolute_pose_priors.empty())
+                        {
+                            absolute_pose_priors.push_back(make_prior(*T_WB_anchor_override, false));
+                        }
+
+                        RCLCPP_INFO(
+                            get_logger(),
+                            "Localization bootstrap established: support=%zu score=%.1f; switching from odometry-only to map-localized tracking",
+                            bootstrap->support_count,
+                            bootstrap->score);
+                    }
+                    else
                     {
                         RCLCPP_INFO_THROTTLE(
                             get_logger(), *get_clock(), 2000,
-                            "Localization mode is waiting for a stable tag-based bootstrap");
-                        continue;
+                            "Localization mode has not seen a stable mapped tag yet; running in pure odometry until first bootstrap");
                     }
-
-                    localization_T_map_odom_ = bootstrap->T_MO;
-                    localization_bootstrapped_ = true;
-                    T_WB_init_override = localization_T_map_odom_ * ev.T_OB;
-                    T_WB_anchor_override = T_WB_init_override;
-
-                    const auto pose_prior_estimates = localization_->estimatePosePriors(kf_stamp);
-                    for (const auto &estimate : pose_prior_estimates)
-                    {
-                        const bool robust =
-                            estimate.support_count < localization_->config().bootstrap_min_inliers;
-                        absolute_pose_priors.push_back(make_prior(estimate.T_MB, robust));
-                    }
-                    if (absolute_pose_priors.empty())
-                    {
-                        absolute_pose_priors.push_back(make_prior(*T_WB_anchor_override, false));
-                    }
-
-                    RCLCPP_INFO(
-                        get_logger(),
-                        "Localization bootstrap established: support=%zu score=%.1f",
-                        bootstrap->support_count,
-                        bootstrap->score);
                 }
                 else
                 {
