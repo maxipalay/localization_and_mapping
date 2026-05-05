@@ -145,9 +145,9 @@ visual_inertial_optimization:
     localization_pose_prior_huber_k: 1.0
     localization_cluster_translation_m: 0.75
     localization_cluster_rotation_deg: 20.0
-    localization_bootstrap_min_inliers: 2
     localization_stable_hypothesis_age_s: 1.0
     localization_stable_min_frames: 3
+    localization_relocalization_min_history_frames: 5
     localization_stable_translation_m: 0.25
     localization_stable_rotation_deg: 8.0
     localization_relocalize_translation_m: 0.25

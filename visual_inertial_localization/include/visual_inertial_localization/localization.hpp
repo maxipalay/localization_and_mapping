@@ -35,9 +35,9 @@ struct LocalizationConfig
     double pose_prior_huber_k{1.0};
     double cluster_translation_m{0.75};
     double cluster_rotation_deg{20.0};
-    size_t bootstrap_min_inliers{2};
     double stable_hypothesis_age_s{1.0};
     size_t stable_min_frames{3};
+    size_t relocalization_min_history_frames{5};
     double stable_translation_m{0.25};
     double stable_rotation_deg{8.0};
     double relocalize_translation_m{0.25};
@@ -119,6 +119,7 @@ public:
     std::optional<PosePriorEstimate> estimatePosePrior(const rclcpp::Time &stamp) const;
     std::vector<PosePriorEstimate> estimatePosePriors(const rclcpp::Time &stamp) const;
     std::optional<StableCorrectionEstimate> estimateStableCorrection(const rclcpp::Time &stamp) const;
+    std::optional<StableCorrectionEstimate> estimateRelocalizationCorrection(const rclcpp::Time &stamp) const;
     size_t bufferedObservationCount() const noexcept;
 
     const LocalizationConfig &config() const noexcept;
@@ -153,7 +154,8 @@ private:
         const std::vector<PoseHypothesis> &hypotheses,
         const std::vector<size_t> &cluster_indices) const;
     void pruneTemporalCorrectionHypothesesLocked_(int64_t newest_stamp_ns) const;
-    std::optional<StableCorrectionEstimate> computeStableCorrectionLocked_() const;
+    std::optional<StableCorrectionEstimate> computeCorrectionEstimateLocked_(
+        size_t min_frame_support) const;
     std::optional<StableCorrectionEstimate> updateStableCorrection_(
         int64_t stamp_ns,
         const Eigen::Isometry3d &T_MO,

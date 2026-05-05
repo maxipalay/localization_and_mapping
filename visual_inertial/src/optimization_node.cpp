@@ -346,12 +346,12 @@ public:
                 declare_parameter<double>("localization_cluster_translation_m", 0.75);
             localization_cfg.cluster_rotation_deg =
                 declare_parameter<double>("localization_cluster_rotation_deg", 20.0);
-            localization_cfg.bootstrap_min_inliers = static_cast<size_t>(
-                declare_parameter<int>("localization_bootstrap_min_inliers", 2));
             localization_cfg.stable_hypothesis_age_s =
                 declare_parameter<double>("localization_stable_hypothesis_age_s", 1.0);
             localization_cfg.stable_min_frames = static_cast<size_t>(
                 declare_parameter<int>("localization_stable_min_frames", 3));
+            localization_cfg.relocalization_min_history_frames = static_cast<size_t>(
+                declare_parameter<int>("localization_relocalization_min_history_frames", 5));
             localization_cfg.stable_translation_m =
                 declare_parameter<double>("localization_stable_translation_m", 0.25);
             localization_cfg.stable_rotation_deg =
@@ -788,9 +788,7 @@ private:
                         const auto pose_prior_estimates = localization_->estimatePosePriors(kf_stamp);
                         for (const auto &estimate : pose_prior_estimates)
                         {
-                            const bool robust =
-                                estimate.support_count < localization_->config().bootstrap_min_inliers;
-                            absolute_pose_priors.push_back(make_prior(estimate.T_MB, robust));
+                            absolute_pose_priors.push_back(make_prior(estimate.T_MB, true));
                         }
                         if (absolute_pose_priors.empty())
                         {
@@ -818,24 +816,25 @@ private:
                 if (localization_bootstrapped_)
                 {
                     const auto stable_correction = localization_->estimateStableCorrection(kf_stamp);
+                    const auto relocalization_correction =
+                        localization_->estimateRelocalizationCorrection(kf_stamp);
                     bool used_stable_correction = false;
+                    bool relocalized = false;
 
-                    if (stable_correction.has_value())
+                    if (relocalization_correction.has_value())
                     {
                         const double relocalize_rotation_thresh_rad =
                             localization_->config().relocalize_rotation_deg * M_PI / 180.0;
-                        const double tracking_deadband_rotation_thresh_rad =
-                            localization_->config().tracking_deadband_rotation_deg * M_PI / 180.0;
                         const double translation_error_m =
-                            poseTranslationDistance(localization_T_map_odom_, stable_correction->T_MO);
+                            poseTranslationDistance(localization_T_map_odom_, relocalization_correction->T_MO);
                         const double rotation_error_rad =
-                            poseRotationDistanceRad(localization_T_map_odom_, stable_correction->T_MO);
+                            poseRotationDistanceRad(localization_T_map_odom_, relocalization_correction->T_MO);
 
                         if (translation_error_m > localization_->config().relocalize_translation_m ||
                             rotation_error_rad > relocalize_rotation_thresh_rad)
                         {
                             opt->reset();
-                            localization_T_map_odom_ = stable_correction->T_MO;
+                            localization_T_map_odom_ = relocalization_correction->T_MO;
                             T_WB_init_override = localization_T_map_odom_ * ev.T_OB;
                             T_WB_anchor_override = T_WB_init_override;
                             absolute_pose_priors.clear();
@@ -848,14 +847,26 @@ private:
 
                             RCLCPP_WARN_THROTTLE(
                                 get_logger(), *get_clock(), 2000,
-                                "Localization relocalization trigger: stable_frames=%zu support=%zu map_odom_trans_error=%.3f m map_odom_rot_error=%.1f deg",
-                                stable_correction->frame_support,
-                                stable_correction->support_count,
+                                "Localization relocalization trigger: history_frames=%zu support=%zu map_odom_trans_error=%.3f m map_odom_rot_error=%.1f deg",
+                                relocalization_correction->frame_support,
+                                relocalization_correction->support_count,
                                 translation_error_m,
                                 rotation_error_rad * 180.0 / M_PI);
+                            relocalized = true;
+                            used_stable_correction = true;
                         }
-                        else if (
-                            translation_error_m > localization_->config().tracking_deadband_translation_m ||
+                    }
+
+                    if (!relocalized && stable_correction.has_value())
+                    {
+                        const double tracking_deadband_rotation_thresh_rad =
+                            localization_->config().tracking_deadband_rotation_deg * M_PI / 180.0;
+                        const double translation_error_m =
+                            poseTranslationDistance(localization_T_map_odom_, stable_correction->T_MO);
+                        const double rotation_error_rad =
+                            poseRotationDistanceRad(localization_T_map_odom_, stable_correction->T_MO);
+
+                        if (translation_error_m > localization_->config().tracking_deadband_translation_m ||
                             rotation_error_rad > tracking_deadband_rotation_thresh_rad)
                         {
                             absolute_pose_priors.clear();
@@ -876,9 +887,7 @@ private:
                         const auto pose_prior_estimates = localization_->estimatePosePriors(kf_stamp);
                         for (const auto &estimate : pose_prior_estimates)
                         {
-                            const bool robust =
-                                estimate.support_count < localization_->config().bootstrap_min_inliers;
-                            absolute_pose_priors.push_back(make_prior(estimate.T_MB, robust));
+                            absolute_pose_priors.push_back(make_prior(estimate.T_MB, true));
                         }
                     }
                 }

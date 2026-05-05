@@ -348,11 +348,6 @@ std::optional<BootstrapEstimate> LocalizationModule::estimateBootstrap(
         }
     }
 
-    if (best_support < config_.bootstrap_min_inliers)
-    {
-        return std::nullopt;
-    }
-
     BootstrapEstimate estimate;
     estimate.T_MO = hypotheses[best_index].T_MO;
     estimate.support_count = best_support;
@@ -380,11 +375,6 @@ std::vector<PosePriorEstimate> LocalizationModule::estimatePosePriors(const rclc
     }
 
     const auto cluster_indices = dominantHypothesisCluster_(hypotheses);
-    if (cluster_indices.size() < config_.bootstrap_min_inliers)
-    {
-        return {};
-    }
-
     std::vector<size_t> ordered_indices = cluster_indices;
     std::sort(
         ordered_indices.begin(),
@@ -441,7 +431,37 @@ std::optional<StableCorrectionEstimate> LocalizationModule::estimateStableCorrec
         }
     }
 
-    return computeStableCorrectionLocked_();
+    return computeCorrectionEstimateLocked_(config_.stable_min_frames);
+}
+
+std::optional<StableCorrectionEstimate> LocalizationModule::estimateRelocalizationCorrection(
+    const rclcpp::Time &stamp) const
+{
+    std::lock_guard<std::mutex> lk(stable_correction_mtx_);
+    const int64_t stamp_ns = stamp.nanoseconds();
+    pruneTemporalCorrectionHypothesesLocked_(stamp_ns);
+    if (stable_correction_buffer_.empty())
+    {
+        return std::nullopt;
+    }
+
+    const int64_t newest_correction_stamp_ns = stable_correction_buffer_.back().stamp_ns;
+    const int64_t last_tag_message_stamp_ns = last_tag_message_stamp_ns_.load();
+    if (last_tag_message_stamp_ns > newest_correction_stamp_ns)
+    {
+        return std::nullopt;
+    }
+
+    if (config_.tag_max_age_s > 0.0)
+    {
+        const int64_t max_age_ns = static_cast<int64_t>(config_.tag_max_age_s * 1e9);
+        if ((stamp_ns - newest_correction_stamp_ns) > max_age_ns)
+        {
+            return std::nullopt;
+        }
+    }
+
+    return computeCorrectionEstimateLocked_(config_.relocalization_min_history_frames);
 }
 
 size_t LocalizationModule::bufferedObservationCount() const noexcept
@@ -616,9 +636,10 @@ void LocalizationModule::pruneTemporalCorrectionHypothesesLocked_(int64_t newest
     }
 }
 
-std::optional<StableCorrectionEstimate> LocalizationModule::computeStableCorrectionLocked_() const
+std::optional<StableCorrectionEstimate> LocalizationModule::computeCorrectionEstimateLocked_(
+    size_t min_frame_support) const
 {
-    if (stable_correction_buffer_.size() < config_.stable_min_frames)
+    if (stable_correction_buffer_.size() < min_frame_support)
     {
         return std::nullopt;
     }
@@ -656,7 +677,7 @@ std::optional<StableCorrectionEstimate> LocalizationModule::computeStableCorrect
         }
     }
 
-    if (best_cluster.size() < config_.stable_min_frames)
+    if (best_cluster.size() < min_frame_support)
     {
         return std::nullopt;
     }
@@ -705,7 +726,7 @@ std::optional<StableCorrectionEstimate> LocalizationModule::updateStableCorrecti
     }
 
     pruneTemporalCorrectionHypothesesLocked_(stamp_ns);
-    return computeStableCorrectionLocked_();
+    return computeCorrectionEstimateLocked_(config_.stable_min_frames);
 }
 
 } // namespace visual_inertial_localization
