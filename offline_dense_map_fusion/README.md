@@ -1,0 +1,112 @@
+# offline_dense_map_fusion
+
+Offline dense map fusion from `online_mapping_logger` sessions and `offline_global_graph`
+optimized poses.
+
+## What it does
+
+- Reads the logged RGB-D session
+- Reads optimized body poses from `offline_global_graph/optimized_keyframes.csv`
+- Reads camera intrinsics and distortion from the logged mapping image stream camera info
+  (typically `calibration/rgb_camera_info.yaml`)
+- Reads a user-supplied `body -> camera` extrinsic YAML
+- Assumes the logged depth is aligned to the logged mapping image stream
+- If the logged camera info includes `plumb_bob` or `rational_polynomial`
+  distortion coefficients, they are passed through to `nvblox::Camera`
+- Fuses depth and color into an `nvblox` TSDF map
+- Exports a colored mesh PLY generated from the TSDF
+
+This backend requires a CUDA-capable GPU visible at runtime because `nvblox`
+creates CUDA streams during mapper construction.
+
+## Usage
+
+```bash
+ros2 run offline_dense_map_fusion offline_dense_map_fusion_cli \
+  --session-dir /tmp/online_mapping_sessions/session_20260321_135348 \
+  --body-to-camera-extrinsics /tmp/online_mapping_sessions/<session>/calibration/body_to_rgb_camera.yaml
+```
+
+For the current RealSense logger setup in this workspace, the recommended logged pair is:
+
+- `/camera0/realsense_splitter_node/output/infra_1`
+- `/camera0/realsense_splitter_node/output/depth`
+
+That is the current stable logging workaround, but it does not satisfy this tool's single-camera
+alignment assumption. Use it only if you accept the geometry mismatch, or update the fusion path to
+support separate image and depth camera models.
+
+Optional flags:
+
+- `--output-dir PATH`
+- `--voxel-size FLOAT`
+- `--depth-scale FLOAT`
+- `--min-depth FLOAT`
+- `--max-depth FLOAT`
+- `--max-world-z FLOAT`
+- `--pixel-stride INT`
+- `--crop-border-px INT`
+- `--truncation-distance-vox FLOAT`
+- `--max-weight FLOAT`
+- `--mesh-min-weight FLOAT`
+- `--disable-esdf`
+- `--esdf-max-distance FLOAT`
+- `--esdf-min-weight FLOAT`
+- `--esdf-max-site-distance-vox FLOAT`
+- `--esdf-slice-height FLOAT`
+
+## Extrinsics YAML
+
+```yaml
+body_frame_id: body
+camera_frame_id: camera0_color_optical_frame
+position: [0.0, 0.0, 0.0]
+orientation_xyzw: [0.0, 0.0, 0.0, 1.0]
+```
+
+The transform is interpreted as `body_T_camera`.
+
+## Outputs
+
+- `fused_mesh.ply`
+- `fused_esdf.ply`
+- `esdf_slice_z_<height>_occupancy.pgm`
+- `esdf_slice_z_<height>_occupancy.yaml`
+- `camera_poses.csv`
+- `fusion_summary.yaml`
+
+If `--esdf-slice-height` is provided, the tool samples the 3D ESDF at that world-frame
+`z` height and exports a `map_server`-style 2D occupancy map (`PGM + YAML`) suitable
+for typical ROS planning/navigation consumers.
+
+If you only need the 2D planning map and want to avoid the memory cost of the full
+3D ESDF, combine:
+
+```bash
+--disable-esdf --esdf-slice-height <z>
+```
+
+In that mode the tool uses nvblox's 2D ESDF slice update path instead of building and
+exporting the full 3D ESDF layer.
+
+## Useful tuning
+
+If the mesh is noisy, a good first pass is:
+
+```bash
+ros2 run offline_dense_map_fusion offline_dense_map_fusion_cli \
+  --session-dir /tmp/online_mapping_sessions/<session> \
+  --body-to-camera-extrinsics /tmp/online_mapping_sessions/<session>/calibration/body_to_rgb_camera.yaml \
+  --voxel-size 0.05 \
+  --pixel-stride 4 \
+  --crop-border-px 10 \
+  --min-depth 0.3 \
+  --max-depth 3.0 \
+  --max-world-z 2.2 \
+  --truncation-distance-vox 6.0 \
+  --max-weight 10.0 \
+  --mesh-min-weight 0.5
+```
+
+`--max-world-z` drops any depth sample whose back-projected 3D point lands above that
+world-frame `z` height before TSDF integration. This is a simple way to suppress ceilings.

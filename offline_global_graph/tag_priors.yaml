@@ -1,0 +1,31 @@
+tags:
+  - id: 1
+    anchor: true
+    position: [0.0, 0.0, 1.8]
+    orientation_xyzw: [0.5, 0.5, 0.5, 0.5]
+    translation_sigma_m: 0.01
+    rotation_sigma_rad: 0.01
+
+  - id: 2
+    position: [1.4, 2.2, 1.49]
+    orientation_xyzw: [0.70710678, 0.0, 0.0, 0.70710678]
+    translation_sigma_m: 0.1
+    rotation_sigma_rad: 0.02
+
+  - id: 3
+    position: [2.3, -0.9, 1.54]
+    orientation_xyzw: [0.5, -0.5, -0.5, 0.5]
+    translation_sigma_m: 0.1
+    rotation_sigma_rad: 0.02
+
+  - id: 4
+    position: [-2.45, -1.27, 1.6]
+    orientation_xyzw: [0.5, 0.5, 0.5, 0.5]
+    translation_sigma_m: 0.1
+    rotation_sigma_rad: 0.02
+
+  - id: 5
+    position: [-1.43, -4.05, 1.52]
+    orientation_xyzw: [0.0, 0.70710678, 0.70710678, 0.0]
+    translation_sigma_m: 0.1
+    rotation_sigma_rad: 0.02

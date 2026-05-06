@@ -1,0 +1,29 @@
+online_mapping_logger:
+  ros__parameters:
+    output_root: /tmp/online_mapping_sessions
+    session_name: ""
+    overwrite_existing_session: false
+    body_frame_id: camera0_imu_frame
+
+    rgb_image_topic: /camera0/realsense_splitter_node/output/infra_1
+    rgb_camera_info_topic: /camera0/infra1/camera_info
+    depth_image_topic: /camera0/realsense_splitter_node/output/depth
+    depth_camera_info_topic: /camera0/depth/camera_info
+    keyframe_topic: /keyframes
+    optimization_result_topic: /optimization_result
+    tag_topic: /detections
+    tag_tf_lookup_timeout_ms: 50.0
+    tag_frame_ids: [1, 2, 3, 4, 5]
+    tag_frame_names: [base, object1, object2, object3, object4]
+
+    rgb_match_tolerance_ms: 50.0
+    depth_match_tolerance_ms: 50.0
+    tag_match_tolerance_ms: 25.0
+    buffer_duration_s: 5.0
+    pending_timeout_s: 4.0
+    maintenance_period_ms: 250
+
+    require_depth: true
+    require_tags: false
+
+    tag_prior_source_path: ""
