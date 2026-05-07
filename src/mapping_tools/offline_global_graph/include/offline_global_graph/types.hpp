@@ -51,14 +51,14 @@ struct OptimizerConfig
   double between_translation_sigma_m{0.05};  // Translation sigma for consecutive-keyframe between factors.
   double between_rotation_sigma_rad{0.1};  // Rotation sigma for consecutive-keyframe between factors.
   double tag_translation_sigma_m{0.10};  // Translation sigma for body-to-tag observation factors.
-  double tag_rotation_sigma_rad{0.2};  // Rotation sigma for body-to-tag observation factors.
+  double tag_rotation_sigma_rad{1.57};  // Rotation sigma for body-to-tag observation factors.
   bool use_tag_anchor_prior{false};  // Add a prior on a chosen tag instead of anchoring the first keyframe.
   int tag_anchor_id{0};  // Tag id to anchor when use_tag_anchor_prior is enabled.
   gtsam::Pose3 tag_anchor_pose;  // World pose used by the tag anchor prior.
   double tag_anchor_translation_sigma_m{0.05};  // Translation sigma of the anchor-tag prior.
   double tag_anchor_rotation_sigma_rad{0.3};  // Rotation sigma of the anchor-tag prior.
   bool reject_distant_tag_observations{true};  // Reject tag observations beyond the configured range limit.
-  double max_tag_observation_distance_m{2.0};  // Maximum allowed body-to-tag range before rejection.
+  double max_tag_observation_distance_m{3.0};  // Maximum allowed body-to-tag range before rejection.
   bool reject_oblique_tag_observations{true};  // Reject tag observations seen at too oblique an angle.
   double max_tag_oblique_angle_deg{40.0};  // Maximum angle between tag normal and viewing direction.
   bool reject_tag_observations_with_hamming{true};  // Reject detections whose decoded tag required too many bit corrections.
