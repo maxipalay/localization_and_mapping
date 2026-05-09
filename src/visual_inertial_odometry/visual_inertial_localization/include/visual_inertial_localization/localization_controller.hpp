@@ -9,12 +9,12 @@
 namespace visual_inertial_localization
 {
 
-class LocalizationModule;
+class LocalizationEngine;
 
 class LocalizationController
 {
 public:
-    explicit LocalizationController(LocalizationModule &module);
+    explicit LocalizationController(LocalizationEngine &engine);
 
     LocalizationDecision processKeyframe(
         int64_t stamp_ns,
@@ -31,7 +31,7 @@ private:
         LocalizationDecision &decision,
         int64_t stamp_ns) const;
 
-    LocalizationModule &module_;
+    LocalizationEngine &engine_;
     mutable LocalizationState state_{LocalizationState::OdomOnly};
     mutable Eigen::Isometry3d T_MO_ = Eigen::Isometry3d::Identity();
 };

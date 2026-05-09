@@ -12,7 +12,6 @@
 #include <visual_inertial/optimization_node_params.hpp>
 
 #include <visual_inertial_common/types.hpp>
-#include <visual_inertial_localization/localization_controller.hpp>
 #include <visual_inertial_localization/localization.hpp>
 #include <visual_inertial_optimization/optimization.hpp>
 #include <visual_inertial_optimization/types.hpp>
@@ -233,9 +232,6 @@ public:
 
             localization_ = std::make_unique<visual_inertial_localization::LocalizationModule>(
                 *params.localization);
-            localization_controller_ =
-                std::make_unique<visual_inertial_localization::LocalizationController>(
-                    *localization_);
             const auto report = localization_->loadTagMap();
             if (localization_->config().tag_map_path.empty())
             {
@@ -598,11 +594,10 @@ private:
             std::optional<Eigen::Isometry3d> T_WB_anchor_override = std::nullopt;
             if (node_cfg_.localization_mode &&
                 localization_ &&
-                localization_controller_ &&
                 localization_use_tag_priors_)
             {
                 const auto decision =
-                    localization_controller_->processKeyframe(
+                    localization_->processKeyframe(
                         rclcpp::Time(msg.header.stamp).nanoseconds(),
                         ev.T_OB);
 
@@ -794,11 +789,11 @@ private:
                 }
             }
 
-            if (localization_controller_ &&
-                localization_controller_->state() ==
+            if (localization_ &&
+                localization_->state() ==
                     visual_inertial_localization::LocalizationState::Localized)
             {
-                localization_controller_->updateMapOdomEstimate(T_map_odom);
+                localization_->updateMapOdomEstimate(T_map_odom);
             }
 
             have_map_odom_.store(true);
@@ -929,7 +924,6 @@ private:
     visual_inertial::OptimizationNodeConfig node_cfg_;
     bool localization_use_tag_priors_{false};
     std::unique_ptr<visual_inertial_localization::LocalizationModule> localization_;
-    std::unique_ptr<visual_inertial_localization::LocalizationController> localization_controller_;
 
     rclcpp::TimerBase::SharedPtr tf_timer_;
 
