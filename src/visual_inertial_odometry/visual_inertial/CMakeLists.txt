@@ -27,9 +27,13 @@ find_package(Boost REQUIRED COMPONENTS serialization)
 find_package(eigen3_cmake_module REQUIRED)
 
 add_executable(tracking_node src/tracking_node.cpp)
-add_executable(optimization_node src/optimization_node.cpp)
+add_executable(optimization_node
+  src/optimization_node.cpp
+  src/optimization_node_params.cpp)
 add_executable(path_viz_node src/path_viz_node.cpp)
 add_executable(tracks_viz_node src/tracks_viz_node.cpp)
+
+target_include_directories(optimization_node PRIVATE include)
 
 # Pull include dirs/defs from deps (including your lib)
 ament_target_dependencies(tracking_node

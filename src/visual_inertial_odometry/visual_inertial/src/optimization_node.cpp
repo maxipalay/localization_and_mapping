@@ -9,6 +9,7 @@
 
 #include <visual_inertial/msg/keyframe.hpp>
 #include <visual_inertial/msg/optimization_result.hpp>
+#include <visual_inertial/optimization_node_params.hpp>
 
 #include <visual_inertial_common/types.hpp>
 #include <visual_inertial_localization/localization.hpp>
@@ -30,6 +31,7 @@
 #include <optional>
 #include <memory>
 #include <cmath>
+#include <stdexcept>
 #include <algorithm>
 #include <chrono>
 #include <unordered_map>
@@ -221,174 +223,21 @@ public:
     OptimizationNode()
         : rclcpp::Node("visual_inertial_optimization")
     {
-        // -------- Parameters --------
-        keyframe_topic_ = declare_parameter<std::string>("keyframe_topic", "keyframes");
-        left_info_topic_ = declare_parameter<std::string>("left_info_topic", "oak/left/camera_info");
-        right_info_topic_ = declare_parameter<std::string>("right_info_topic", "oak/right/camera_info");
+        param_handler_ = std::make_unique<visual_inertial::OptimizationNodeParamHandler>(*this);
+        const auto &params = param_handler_->params();
+        node_cfg_ = params.node;
+        opt_cfg_ = params.optimizer;
 
-        map_frame_id_ = declare_parameter<std::string>("map_frame_id", "map");
-        odom_frame_id_ = declare_parameter<std::string>("odom_frame_id", "odom");
-        body_frame_id_ = declare_parameter<std::string>("body_frame_id", "body");
-        auto_resolve_t_bc_from_tf_ =
-            declare_parameter<bool>("auto_resolve_t_bc_from_tf", true);
-
-        // Broadcast rate for map->odom
-        tf_pub_rate_hz_ = declare_parameter<double>("tf_pub_rate_hz", 30.0);
-
-        // Backend config params
-        cfg_.window_size = static_cast<size_t>(declare_parameter<int>("window_size", 8));
-        cfg_.stereo_sigma_px = declare_parameter<double>("stereo_sigma_px", 1.0);
-        cfg_.stereo_huber_k = declare_parameter<double>("stereo_huber_k", cfg_.stereo_huber_k);
-
-        cfg_.prior_rot_sigma_rad = declare_parameter<double>("prior_rot_sigma_rad", cfg_.prior_rot_sigma_rad);
-        cfg_.prior_trans_sigma_m = declare_parameter<double>("prior_trans_sigma_m", cfg_.prior_trans_sigma_m);
-
-        cfg_.vel_prior_sigma = declare_parameter<double>("vel_prior_sigma", cfg_.vel_prior_sigma);
-        cfg_.bias_acc_prior_sigma = declare_parameter<double>("bias_acc_prior_sigma", cfg_.bias_acc_prior_sigma);
-        cfg_.bias_gyro_prior_sigma = declare_parameter<double>("bias_gyro_prior_sigma", cfg_.bias_gyro_prior_sigma);
-
-        cfg_.use_vo_between = declare_parameter<bool>("use_vo_between", cfg_.use_vo_between);
-        cfg_.between_rot_sigma_rad = declare_parameter<double>("between_rot_sigma_rad", cfg_.between_rot_sigma_rad);
-        cfg_.between_trans_sigma_m = declare_parameter<double>("between_trans_sigma_m", cfg_.between_trans_sigma_m);
-        cfg_.between_huber_k = declare_parameter<double>("between_huber_k", cfg_.between_huber_k);
-        cfg_.use_interval_health_for_vo_between = declare_parameter<bool>(
-            "use_interval_health_for_vo_between", cfg_.use_interval_health_for_vo_between);
-        cfg_.between_health_min_pose_valid_fraction = declare_parameter<double>(
-            "between_health_min_pose_valid_fraction", cfg_.between_health_min_pose_valid_fraction);
-        cfg_.between_health_min_track_retention = declare_parameter<double>(
-            "between_health_min_track_retention", cfg_.between_health_min_track_retention);
-        cfg_.between_health_min_pnp_inlier_ratio = declare_parameter<double>(
-            "between_health_min_pnp_inlier_ratio", cfg_.between_health_min_pnp_inlier_ratio);
-        cfg_.between_health_min_track_coverage = declare_parameter<double>(
-            "between_health_min_track_coverage", cfg_.between_health_min_track_coverage);
-        cfg_.between_health_max_pnp_reproj_rmse_px = declare_parameter<double>(
-            "between_health_max_pnp_reproj_rmse_px", cfg_.between_health_max_pnp_reproj_rmse_px);
-        cfg_.between_health_max_sigma_scale = declare_parameter<double>(
-            "between_health_max_sigma_scale", cfg_.between_health_max_sigma_scale);
-        cfg_.between_health_skip_quality = declare_parameter<double>(
-            "between_health_skip_quality", cfg_.between_health_skip_quality);
-
-        cfg_.use_imu = declare_parameter<bool>("use_imu", cfg_.use_imu);
-
-        cfg_.init_landmarks_from_stereo = declare_parameter<bool>("init_landmarks_from_stereo", true);
-        cfg_.prune_unobserved_landmarks = declare_parameter<bool>("prune_unobserved_landmarks", true);
-
-        // Optional override for body<-camera extrinsics
-        Eigen::Quaterniond q_default(cfg_.T_BC.rotation());
-        q_default.normalize();
-        auto t_bc = declare_parameter<std::vector<double>>(
-            "T_BC_translation", {cfg_.T_BC.translation().x(),
-                                 cfg_.T_BC.translation().y(),
-                                 cfg_.T_BC.translation().z()});
-        auto q_bc_xyzw = declare_parameter<std::vector<double>>(
-            "T_BC_quaternion_xyzw", {q_default.x(), q_default.y(), q_default.z(), q_default.w()});
-        if (t_bc.size() == 3 && q_bc_xyzw.size() == 4)
+        if (node_cfg_.localization_mode)
         {
-            Eigen::Quaterniond q(q_bc_xyzw[3], q_bc_xyzw[0], q_bc_xyzw[1], q_bc_xyzw[2]);
-            if (q.norm() > 1e-9)
+            if (!params.localization.has_value())
             {
-                q.normalize();
-                Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
-                T.linear() = q.toRotationMatrix();
-                T.translation() = Eigen::Vector3d(t_bc[0], t_bc[1], t_bc[2]);
-                cfg_.T_BC = T;
-            }
-            else
-            {
-                RCLCPP_WARN(get_logger(), "T_BC quaternion has near-zero norm; using default extrinsics");
-            }
-        }
-        else
-        {
-            RCLCPP_WARN(get_logger(), "T_BC params malformed (need 3 translation + 4 quaternion entries); using defaults");
-        }
-
-        max_queue_ = static_cast<size_t>(declare_parameter<int>("max_keyframe_queue", 30));
-
-        operation_mode_ = declare_parameter<std::string>("operation_mode", "mapping");
-        if (operation_mode_ != "mapping" && operation_mode_ != "localization")
-        {
-            RCLCPP_WARN(
-                get_logger(),
-                "Unsupported operation_mode='%s'; falling back to mapping",
-                operation_mode_.c_str());
-            operation_mode_ = "mapping";
-        }
-        localization_mode_ = (operation_mode_ == "localization");
-        if (localization_mode_)
-        {
-            visual_inertial_localization::LocalizationConfig localization_cfg;
-            localization_cfg.tag_map_path =
-                declare_parameter<std::string>("localization_tag_map_path", "");
-            localization_cfg.tag_topic =
-                declare_parameter<std::string>("tag_topic", "detections");
-            localization_cfg.tag_tf_lookup_timeout_ms =
-                declare_parameter<double>("tag_tf_lookup_timeout_ms", 50.0);
-            localization_cfg.tag_max_age_s =
-                declare_parameter<double>("localization_tag_max_age_s", 0.5);
-            localization_cfg.tag_buffer_age_s =
-                declare_parameter<double>("tag_buffer_age_s", 2.0);
-            localization_cfg.max_tag_hamming =
-                declare_parameter<int>("max_tag_hamming", 0);
-            localization_cfg.min_tag_decision_margin =
-                declare_parameter<double>("min_tag_decision_margin", 40.0);
-            localization_cfg.max_tag_range_m =
-                declare_parameter<double>("max_tag_range_m", 3.0);
-            localization_cfg.max_tag_oblique_angle_deg =
-                declare_parameter<double>("max_tag_oblique_angle_deg", 40.0);
-            localization_cfg.pose_prior_rot_sigma_rad =
-                declare_parameter<double>("localization_pose_prior_rot_sigma_rad", 0.35);
-            localization_cfg.pose_prior_trans_sigma_m =
-                declare_parameter<double>("localization_pose_prior_trans_sigma_m", 0.10);
-            localization_cfg.pose_prior_huber_k =
-                declare_parameter<double>("localization_pose_prior_huber_k", 1.0);
-            localization_cfg.cluster_translation_m =
-                declare_parameter<double>("localization_cluster_translation_m", 0.75);
-            localization_cfg.cluster_rotation_deg =
-                declare_parameter<double>("localization_cluster_rotation_deg", 20.0);
-            localization_cfg.stable_hypothesis_age_s =
-                declare_parameter<double>("localization_stable_hypothesis_age_s", 1.0);
-            localization_cfg.stable_min_frames = static_cast<size_t>(
-                declare_parameter<int>("localization_stable_min_frames", 3));
-            localization_cfg.relocalization_min_history_frames = static_cast<size_t>(
-                declare_parameter<int>("localization_relocalization_min_history_frames", 5));
-            localization_cfg.stable_translation_m =
-                declare_parameter<double>("localization_stable_translation_m", 0.25);
-            localization_cfg.stable_rotation_deg =
-                declare_parameter<double>("localization_stable_rotation_deg", 8.0);
-            localization_cfg.relocalize_translation_m =
-                declare_parameter<double>("localization_relocalize_translation_m", 0.25);
-            localization_cfg.relocalize_rotation_deg =
-                declare_parameter<double>("localization_relocalize_rotation_deg", 8.0);
-            localization_cfg.tracking_deadband_translation_m =
-                declare_parameter<double>("localization_tracking_deadband_translation_m", 0.05);
-            localization_cfg.tracking_deadband_rotation_deg =
-                declare_parameter<double>("localization_tracking_deadband_rotation_deg", 2.0);
-
-            const auto tag_frame_ids = declare_parameter<std::vector<int64_t>>(
-                "tag_frame_ids", std::vector<int64_t>{});
-            const auto tag_frame_names = declare_parameter<std::vector<std::string>>(
-                "tag_frame_names", std::vector<std::string>{});
-            if (tag_frame_ids.size() != tag_frame_names.size())
-            {
-                RCLCPP_WARN(
-                    get_logger(),
-                    "tag_frame_ids/tag_frame_names size mismatch (%zu vs %zu); ignoring overrides",
-                    tag_frame_ids.size(),
-                    tag_frame_names.size());
-            }
-            else
-            {
-                for (size_t i = 0; i < tag_frame_ids.size(); ++i)
-                {
-                    localization_cfg.tag_frame_overrides.emplace(
-                        static_cast<int>(tag_frame_ids[i]),
-                        tag_frame_names[i]);
-                }
+                throw std::runtime_error(
+                    "optimization node missing localization config in localization mode");
             }
 
             localization_ = std::make_unique<visual_inertial_localization::LocalizationModule>(
-                std::move(localization_cfg));
+                *params.localization);
             const auto report = localization_->loadTagMap();
             if (localization_->config().tag_map_path.empty())
             {
@@ -426,12 +275,12 @@ public:
 
         // -------- TF timer (constant-rate rebroadcast of latest T_map_odom) --------
         using namespace std::chrono_literals;
-        const auto period = (tf_pub_rate_hz_ > 1e-6)
-                                ? std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(1.0 / tf_pub_rate_hz_))
+        const auto period = (node_cfg_.tf_pub_rate_hz > 1e-6)
+                                ? std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(1.0 / node_cfg_.tf_pub_rate_hz))
                                 : 33ms;
 
         tf_timer_ = this->create_wall_timer(
-            std::chrono::duration<double>(1.0 / tf_pub_rate_hz_),
+            std::chrono::duration<double>(1.0 / node_cfg_.tf_pub_rate_hz),
             [this]()
             { this->publishFilteredTf_(); });
 
@@ -442,7 +291,7 @@ public:
 
         // -------- Subscriptions: CameraInfo --------
         left_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
-            left_info_topic_, info_qos,
+            node_cfg_.left_info_topic, info_qos,
             [this](sensor_msgs::msg::CameraInfo::SharedPtr msg)
             {
                 std::lock_guard<std::mutex> lk(calib_mtx_);
@@ -451,7 +300,7 @@ public:
             });
 
         right_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
-            right_info_topic_, info_qos,
+            node_cfg_.right_info_topic, info_qos,
             [this](sensor_msgs::msg::CameraInfo::SharedPtr msg)
             {
                 std::lock_guard<std::mutex> lk(calib_mtx_);
@@ -459,7 +308,7 @@ public:
                 maybeInitRigAndOptimizer_();
             });
 
-        if (localization_mode_ && localization_)
+        if (node_cfg_.localization_mode && localization_)
         {
             tag_sub_ = create_subscription<apriltag_msgs::msg::AprilTagDetectionArray>(
                 localization_->config().tag_topic,
@@ -472,13 +321,13 @@ public:
 
         // -------- Subscription: Keyframes --------
         kf_sub_ = create_subscription<visual_inertial::msg::Keyframe>(
-            keyframe_topic_, kf_qos,
+            node_cfg_.keyframe_topic, kf_qos,
             [this](visual_inertial::msg::Keyframe::SharedPtr msg)
             {
                 {
                     std::lock_guard<std::mutex> lk(q_mtx_);
                     kf_q_.push_back(*msg);
-                    while (kf_q_.size() > max_queue_)
+                    while (kf_q_.size() > node_cfg_.max_keyframe_queue)
                         kf_q_.pop_front();
                 }
                 q_cv_.notify_one();
@@ -491,58 +340,50 @@ public:
 
         RCLCPP_INFO(get_logger(),
                     "Optimization node started. mode=%s KF=%s L_info=%s R_info=%s TF=%s->%s @ %.1f Hz",
-                    operation_mode_.c_str(),
-                    keyframe_topic_.c_str(), left_info_topic_.c_str(), right_info_topic_.c_str(),
-                    map_frame_id_.c_str(), odom_frame_id_.c_str(), tf_pub_rate_hz_);
+                    node_cfg_.operation_mode.c_str(),
+                    node_cfg_.keyframe_topic.c_str(), node_cfg_.left_info_topic.c_str(), node_cfg_.right_info_topic.c_str(),
+                    node_cfg_.map_frame_id.c_str(), node_cfg_.odom_frame_id.c_str(), node_cfg_.tf_pub_rate_hz);
 
         // publisher for imu bias
         auto bias_qos = rclcpp::QoS(rclcpp::KeepLast(2)).reliable().durability_volatile();
         bias_pub_ = this->create_publisher<visual_inertial::msg::ImuBias>("imu_bias", bias_qos);
-        publish_optimization_result_ = declare_parameter<bool>("publish_optimization_result", publish_optimization_result_);
-        optimization_result_topic_ = declare_parameter<std::string>("optimization_result_topic", optimization_result_topic_);
-        if (publish_optimization_result_)
+        if (node_cfg_.publish_optimization_result)
         {
             optimization_result_pub_ = this->create_publisher<visual_inertial::msg::OptimizationResult>(
-                optimization_result_topic_, bias_qos);
+                node_cfg_.optimization_result_topic, bias_qos);
         }
 
         // Landmark publishing
-        publish_optimized_landmarks_ = declare_parameter<bool>("publish_optimized_landmarks", publish_optimized_landmarks_);
-        landmark_topic_ = declare_parameter<std::string>("landmark_topic", landmark_topic_);
-        lm_pub_hz_ = declare_parameter<double>("landmark_pub_hz", 2.0);
-
-        if (publish_optimized_landmarks_)
+        if (node_cfg_.publish_optimized_landmarks)
         {
             auto lm_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile();
-            lm_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(landmark_topic_, lm_qos);
+            lm_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(node_cfg_.landmark_topic, lm_qos);
 
             // Timer (publish at constant rate, independent of keyframes)
             lm_timer_ = create_wall_timer(
-                std::chrono::duration<double>(1.0 / std::max(1e-6, lm_pub_hz_)),
+                std::chrono::duration<double>(1.0 / std::max(1e-6, node_cfg_.landmark_pub_hz)),
                 [this]()
                 { this->publishLandmarksPointCloud_(); });
         }
 
         // Optional smoothing params for TF and landmark caching
-        smooth_tau_s_ = declare_parameter<double>("smooth_tau_s", smooth_tau_s_);
-        publish_tf_hz_ = declare_parameter<double>("publish_tf_hz", publish_tf_hz_);
-        lm_cache_max_ = static_cast<size_t>(declare_parameter<int>("lm_cache_max", static_cast<int>(lm_cache_max_)));
-        lm_fetch_max_ = static_cast<size_t>(declare_parameter<int>("lm_fetch_max", static_cast<int>(lm_fetch_max_)));
+        lm_cache_max_ = node_cfg_.lm_cache_max;
+        lm_fetch_max_ = node_cfg_.lm_fetch_max;
 
-        if (publish_optimized_landmarks_)
+        if (node_cfg_.publish_optimized_landmarks)
         {
             RCLCPP_INFO(get_logger(), "Optimized landmark publishing enabled on '%s' @ %.2f Hz",
-                        landmark_topic_.c_str(), lm_pub_hz_);
+                        node_cfg_.landmark_topic.c_str(), node_cfg_.landmark_pub_hz);
         }
         else
         {
             RCLCPP_INFO(get_logger(), "Optimized landmark publishing disabled");
         }
 
-        if (publish_optimization_result_)
+        if (node_cfg_.publish_optimization_result)
         {
             RCLCPP_INFO(get_logger(), "Optimization result publishing enabled on '%s'",
-                        optimization_result_topic_.c_str());
+                        node_cfg_.optimization_result_topic.c_str());
         }
         else
         {
@@ -631,11 +472,11 @@ private:
             return;
         }
 
-        cfg_.rig = rig;
+        opt_cfg_.rig = rig;
 
         {
             std::lock_guard<std::mutex> lk(opt_mtx_);
-            optimizer_ = std::make_shared<Optimizer>(cfg_);
+            optimizer_ = std::make_shared<Optimizer>(opt_cfg_);
         }
         rig_ready_ = true;
 
@@ -646,7 +487,7 @@ private:
 
     bool maybeResolveBodyCameraExtrinsic_()
     {
-        if (!auto_resolve_t_bc_from_tf_ || t_bc_resolved_from_tf_)
+        if (!node_cfg_.auto_resolve_t_bc_from_tf || t_bc_resolved_from_tf_)
         {
             return true;
         }
@@ -664,17 +505,17 @@ private:
         try
         {
             const auto tf = tf_buffer_->lookupTransform(
-                body_frame_id_, camera_frame, tf2::TimePointZero);
-            cfg_.T_BC = transformMsgToIso(tf.transform);
+                node_cfg_.body_frame_id, camera_frame, tf2::TimePointZero);
+            opt_cfg_.T_BC = transformMsgToIso(tf.transform);
             t_bc_resolved_from_tf_ = true;
 
-            Eigen::Quaterniond q(cfg_.T_BC.rotation());
+            Eigen::Quaterniond q(opt_cfg_.T_BC.rotation());
             q.normalize();
             RCLCPP_INFO(
                 get_logger(),
                 "Resolved T_BC from TF: %s <- %s, t=[%.6f %.6f %.6f], q_xyzw=[%.6f %.6f %.6f %.6f]",
-                body_frame_id_.c_str(), camera_frame.c_str(),
-                cfg_.T_BC.translation().x(), cfg_.T_BC.translation().y(), cfg_.T_BC.translation().z(),
+                node_cfg_.body_frame_id.c_str(), camera_frame.c_str(),
+                opt_cfg_.T_BC.translation().x(), opt_cfg_.T_BC.translation().y(), opt_cfg_.T_BC.translation().z(),
                 q.x(), q.y(), q.z(), q.w());
             return true;
         }
@@ -683,7 +524,7 @@ private:
             RCLCPP_WARN_THROTTLE(
                 get_logger(), *get_clock(), 2000,
                 "Waiting for TF %s <- %s to resolve T_BC: %s",
-                body_frame_id_.c_str(), camera_frame.c_str(), ex.what());
+                node_cfg_.body_frame_id.c_str(), camera_frame.c_str(), ex.what());
             return false;
         }
     }
@@ -761,7 +602,7 @@ private:
             std::vector<AbsolutePosePrior> absolute_pose_priors;
             std::optional<Eigen::Isometry3d> T_WB_init_override = std::nullopt;
             std::optional<Eigen::Isometry3d> T_WB_anchor_override = std::nullopt;
-            if (localization_mode_ && localization_ && localization_use_tag_priors_)
+            if (node_cfg_.localization_mode && localization_ && localization_use_tag_priors_)
             {
                 const auto kf_stamp = rclcpp::Time(msg.header.stamp);
                 auto make_prior = [this](const Eigen::Isometry3d &T_WB, bool robust)
@@ -950,7 +791,7 @@ private:
 
             visual_inertial::msg::OptimizationResult opt_msg;
             opt_msg.header.stamp = msg.header.stamp;
-            opt_msg.header.frame_id = map_frame_id_;
+            opt_msg.header.frame_id = node_cfg_.map_frame_id;
             opt_msg.kf_id = res->kf_id;
             opt_msg.t_s = res->t_s;
             opt_msg.pose_wc_opt = isoToPoseMsg(res->T_WC_opt);
@@ -1034,7 +875,7 @@ private:
                 }
             }
 
-            if (localization_mode_ && localization_bootstrapped_)
+            if (node_cfg_.localization_mode && localization_bootstrapped_)
             {
                 localization_T_map_odom_ = T_map_odom;
             }
@@ -1057,10 +898,10 @@ private:
             // compute alpha from dt and time constant
             double dt = (now - last_filt_update_).seconds();
             if (dt <= 0.0)
-                dt = 1.0 / publish_tf_hz_;
+                dt = 1.0 / node_cfg_.publish_tf_hz;
             last_filt_update_ = now;
 
-            double alpha = dt / (smooth_tau_s_ + dt); // EMA equivalent
+            double alpha = dt / (node_cfg_.smooth_tau_s + dt); // EMA equivalent
             if (alpha < 0.0)
                 alpha = 0.0;
             if (alpha > 1.0)
@@ -1084,7 +925,7 @@ private:
         }
 
         // publish TF outside the lock
-        auto tf = isoToTf(T_filt, now, map_frame_id_, odom_frame_id_);
+        auto tf = isoToTf(T_filt, now, node_cfg_.map_frame_id, node_cfg_.odom_frame_id);
         tf_broadcaster_->sendTransform(tf);
     }
 
@@ -1108,7 +949,7 @@ private:
 
         sensor_msgs::msg::PointCloud2 msg;
         msg.header.stamp = this->now();
-        msg.header.frame_id = map_frame_id_; // usually "map"
+        msg.header.frame_id = node_cfg_.map_frame_id; // usually "map"
         msg.height = 1;
         msg.width = static_cast<uint32_t>(pts.size());
         msg.is_dense = false;
@@ -1136,13 +977,13 @@ private:
 
     void onTagDetections_(apriltag_msgs::msg::AprilTagDetectionArray::SharedPtr msg)
     {
-        if (!localization_mode_ || !localization_ || !localization_use_tag_priors_ || !tf_buffer_ || !msg)
+        if (!node_cfg_.localization_mode || !localization_ || !localization_use_tag_priors_ || !tf_buffer_ || !msg)
         {
             return;
         }
 
         const auto report = localization_->ingestDetections(
-            *msg, body_frame_id_, odom_frame_id_, *tf_buffer_);
+            *msg, node_cfg_.body_frame_id, node_cfg_.odom_frame_id, *tf_buffer_);
         const auto stable_correction =
             localization_->estimateStableCorrection(rclcpp::Time(msg->header.stamp));
         RCLCPP_INFO_THROTTLE(
@@ -1163,21 +1004,13 @@ private:
     }
 
 private:
-    // Topics / frames
-    std::string keyframe_topic_;
-    std::string left_info_topic_;
-    std::string right_info_topic_;
-    std::string body_frame_id_;
-    std::string map_frame_id_;
-    std::string odom_frame_id_;
-    std::string operation_mode_{"mapping"};
-    bool localization_mode_{false};
+    std::unique_ptr<visual_inertial::OptimizationNodeParamHandler> param_handler_;
+    visual_inertial::OptimizationNodeConfig node_cfg_;
     bool localization_use_tag_priors_{false};
     std::unique_ptr<visual_inertial_localization::LocalizationModule> localization_;
     bool localization_bootstrapped_{false};
     Eigen::Isometry3d localization_T_map_odom_ = Eigen::Isometry3d::Identity();
 
-    double tf_pub_rate_hz_{30.0};
     rclcpp::TimerBase::SharedPtr tf_timer_;
 
     // Subscriptions
@@ -1190,7 +1023,6 @@ private:
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-    bool auto_resolve_t_bc_from_tf_{true};
     bool t_bc_resolved_from_tf_{false};
 
     // Latest map->odom cached transform
@@ -1204,7 +1036,7 @@ private:
     std::atomic<bool> rig_ready_{false};
 
     // Backend
-    OptimizationConfig cfg_;
+    OptimizationConfig opt_cfg_;
     std::mutex opt_mtx_;
     std::shared_ptr<Optimizer> optimizer_;
 
@@ -1212,7 +1044,6 @@ private:
     std::mutex q_mtx_;
     std::condition_variable q_cv_;
     std::deque<visual_inertial::msg::Keyframe> kf_q_;
-    size_t max_queue_{30};
 
     std::thread worker_;
     std::atomic<bool> stop_{false};
@@ -1226,9 +1057,6 @@ private:
     Eigen::Isometry3d T_map_odom_filt_ = Eigen::Isometry3d::Identity();
     bool have_target_ = false;
     bool have_filt_ = false;
-
-    double smooth_tau_s_ = 0.5; // time constant (tune 0.2..2.0)
-    double publish_tf_hz_ = 30.0;
 
     rclcpp::Time last_filt_update_;
 
@@ -1246,11 +1074,6 @@ private:
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lm_pub_;
     rclcpp::TimerBase::SharedPtr lm_timer_;
-    bool publish_optimization_result_{true};
-    std::string optimization_result_topic_{"optimization_result"};
-    bool publish_optimized_landmarks_{true};
-    std::string landmark_topic_{"optimized_landmarks"};
-    double lm_pub_hz_{2.0};
 };
 
 int main(int argc, char **argv)
