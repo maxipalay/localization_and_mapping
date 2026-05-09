@@ -17,6 +17,7 @@ find_package(yaml-cpp REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
   src/localization.cpp
+  src/localization_controller.cpp
 )
 
 ament_target_dependencies(${PROJECT_NAME}

@@ -12,6 +12,7 @@
 #include <visual_inertial/optimization_node_params.hpp>
 
 #include <visual_inertial_common/types.hpp>
+#include <visual_inertial_localization/localization_controller.hpp>
 #include <visual_inertial_localization/localization.hpp>
 #include <visual_inertial_optimization/optimization.hpp>
 #include <visual_inertial_optimization/types.hpp>
@@ -108,21 +109,15 @@ namespace
         return T;
     }
 
-    static double poseTranslationDistance(
-        const Eigen::Isometry3d &T_a,
-        const Eigen::Isometry3d &T_b)
+    static AbsolutePosePrior toAbsolutePosePrior(
+        const visual_inertial_localization::LocalizationPosePrior &prior)
     {
-        return (T_a.translation() - T_b.translation()).norm();
-    }
-
-    static double poseRotationDistanceRad(
-        const Eigen::Isometry3d &T_a,
-        const Eigen::Isometry3d &T_b)
-    {
-        Eigen::Quaterniond q_rel(T_a.linear().transpose() * T_b.linear());
-        q_rel.normalize();
-        const double w = std::clamp(std::abs(q_rel.w()), 0.0, 1.0);
-        return 2.0 * std::acos(w);
+        AbsolutePosePrior out;
+        out.T_WB = prior.T_WB;
+        out.rot_sigma_rad = prior.rot_sigma_rad;
+        out.trans_sigma_m = prior.trans_sigma_m;
+        out.huber_k = prior.huber_k;
+        return out;
     }
 
     static KeyframeEvent toKeyframeEvent(const visual_inertial::msg::Keyframe &msg)
@@ -238,6 +233,9 @@ public:
 
             localization_ = std::make_unique<visual_inertial_localization::LocalizationModule>(
                 *params.localization);
+            localization_controller_ =
+                std::make_unique<visual_inertial_localization::LocalizationController>(
+                    *localization_);
             const auto report = localization_->loadTagMap();
             if (localization_->config().tag_map_path.empty())
             {
@@ -275,10 +273,6 @@ public:
 
         // -------- TF timer (constant-rate rebroadcast of latest T_map_odom) --------
         using namespace std::chrono_literals;
-        const auto period = (node_cfg_.tf_pub_rate_hz > 1e-6)
-                                ? std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(1.0 / node_cfg_.tf_pub_rate_hz))
-                                : 33ms;
-
         tf_timer_ = this->create_wall_timer(
             std::chrono::duration<double>(1.0 / node_cfg_.tf_pub_rate_hz),
             [this]()
@@ -602,134 +596,59 @@ private:
             std::vector<AbsolutePosePrior> absolute_pose_priors;
             std::optional<Eigen::Isometry3d> T_WB_init_override = std::nullopt;
             std::optional<Eigen::Isometry3d> T_WB_anchor_override = std::nullopt;
-            if (node_cfg_.localization_mode && localization_ && localization_use_tag_priors_)
+            if (node_cfg_.localization_mode &&
+                localization_ &&
+                localization_controller_ &&
+                localization_use_tag_priors_)
             {
-                const auto kf_stamp = rclcpp::Time(msg.header.stamp);
-                auto make_prior = [this](const Eigen::Isometry3d &T_WB, bool robust)
-                {
-                    AbsolutePosePrior prior;
-                    prior.T_WB = T_WB;
-                    prior.rot_sigma_rad = localization_->config().pose_prior_rot_sigma_rad;
-                    prior.trans_sigma_m = localization_->config().pose_prior_trans_sigma_m;
-                    prior.huber_k = robust ? localization_->config().pose_prior_huber_k : 0.0;
-                    return prior;
-                };
+                const auto decision =
+                    localization_controller_->processKeyframe(
+                        rclcpp::Time(msg.header.stamp).nanoseconds(),
+                        ev.T_OB);
 
-                if (!localization_bootstrapped_)
+                for (const auto &prior : decision.optimizer_inputs.absolute_pose_priors)
                 {
-                    const auto bootstrap = localization_->estimateBootstrap(kf_stamp, ev.T_OB);
-                    if (bootstrap.has_value())
+                    absolute_pose_priors.push_back(toAbsolutePosePrior(prior));
+                }
+                T_WB_init_override = decision.optimizer_inputs.T_WB_init_override;
+                T_WB_anchor_override = decision.optimizer_inputs.T_WB_anchor_override;
+
+                if (decision.action == visual_inertial_localization::LocalizationAction::Bootstrap)
+                {
+                    opt->reset();
+                    if (decision.bootstrap.has_value())
                     {
-                        opt->reset();
-                        localization_T_map_odom_ = bootstrap->T_MO;
-                        localization_bootstrapped_ = true;
-                        T_WB_init_override = localization_T_map_odom_ * ev.T_OB;
-                        T_WB_anchor_override = T_WB_init_override;
-
-                        const auto pose_prior_estimates = localization_->estimatePosePriors(kf_stamp);
-                        for (const auto &estimate : pose_prior_estimates)
-                        {
-                            absolute_pose_priors.push_back(make_prior(estimate.T_MB, true));
-                        }
-                        if (absolute_pose_priors.empty())
-                        {
-                            absolute_pose_priors.push_back(make_prior(*T_WB_anchor_override, false));
-                        }
-
                         RCLCPP_INFO(
                             get_logger(),
                             "Localization bootstrap established: support=%zu score=%.1f; switching from odometry-only to map-localized tracking",
-                            bootstrap->support_count,
-                            bootstrap->score);
+                            decision.bootstrap->support_count,
+                            decision.bootstrap->score);
                     }
-                    else
+                }
+                else if (decision.waiting_for_bootstrap)
+                {
+                    RCLCPP_INFO_THROTTLE(
+                        get_logger(), *get_clock(), 2000,
+                        "Localization mode has not seen a stable mapped tag yet; running in pure odometry until first bootstrap");
+                }
+
+                if (decision.action == visual_inertial_localization::LocalizationAction::Relocalize)
+                {
+                    opt->reset();
+                    RCLCPP_INFO(
+                        get_logger(),
+                        "Localization graph reset for relocalization at incoming kf_id=%lu",
+                        static_cast<unsigned long>(ev.kf_id));
+
+                    if (decision.relocalization.has_value())
                     {
-                        RCLCPP_INFO_THROTTLE(
+                        RCLCPP_WARN_THROTTLE(
                             get_logger(), *get_clock(), 2000,
-                            "Localization mode has not seen a stable mapped tag yet; running in pure odometry until first bootstrap");
-                    }
-                }
-                else
-                {
-                    T_WB_init_override = localization_T_map_odom_ * ev.T_OB;
-                }
-
-                if (localization_bootstrapped_)
-                {
-                    const auto stable_correction = localization_->estimateStableCorrection(kf_stamp);
-                    const auto relocalization_correction =
-                        localization_->estimateRelocalizationCorrection(kf_stamp);
-                    bool used_stable_correction = false;
-                    bool relocalized = false;
-
-                    if (relocalization_correction.has_value())
-                    {
-                        const double relocalize_rotation_thresh_rad =
-                            localization_->config().relocalize_rotation_deg * M_PI / 180.0;
-                        const double translation_error_m =
-                            poseTranslationDistance(localization_T_map_odom_, relocalization_correction->T_MO);
-                        const double rotation_error_rad =
-                            poseRotationDistanceRad(localization_T_map_odom_, relocalization_correction->T_MO);
-
-                        if (translation_error_m > localization_->config().relocalize_translation_m ||
-                            rotation_error_rad > relocalize_rotation_thresh_rad)
-                        {
-                            opt->reset();
-                            localization_T_map_odom_ = relocalization_correction->T_MO;
-                            T_WB_init_override = localization_T_map_odom_ * ev.T_OB;
-                            T_WB_anchor_override = T_WB_init_override;
-                            absolute_pose_priors.clear();
-                            absolute_pose_priors.push_back(make_prior(*T_WB_anchor_override, false));
-
-                            RCLCPP_INFO(
-                                get_logger(),
-                                "Localization graph reset for relocalization at incoming kf_id=%lu",
-                                static_cast<unsigned long>(ev.kf_id));
-
-                            RCLCPP_WARN_THROTTLE(
-                                get_logger(), *get_clock(), 2000,
-                                "Localization relocalization trigger: history_frames=%zu support=%zu map_odom_trans_error=%.3f m map_odom_rot_error=%.1f deg",
-                                relocalization_correction->frame_support,
-                                relocalization_correction->support_count,
-                                translation_error_m,
-                                rotation_error_rad * 180.0 / M_PI);
-                            relocalized = true;
-                            used_stable_correction = true;
-                        }
-                    }
-
-                    if (!relocalized && stable_correction.has_value())
-                    {
-                        const double tracking_deadband_rotation_thresh_rad =
-                            localization_->config().tracking_deadband_rotation_deg * M_PI / 180.0;
-                        const double translation_error_m =
-                            poseTranslationDistance(localization_T_map_odom_, stable_correction->T_MO);
-                        const double rotation_error_rad =
-                            poseRotationDistanceRad(localization_T_map_odom_, stable_correction->T_MO);
-
-                        if (translation_error_m > localization_->config().tracking_deadband_translation_m ||
-                            rotation_error_rad > tracking_deadband_rotation_thresh_rad)
-                        {
-                            absolute_pose_priors.clear();
-                            absolute_pose_priors.push_back(
-                                make_prior(stable_correction->T_MO * ev.T_OB, true));
-                        }
-                        else
-                        {
-                            absolute_pose_priors.clear();
-                        }
-
-                        used_stable_correction = true;
-                    }
-
-                    if (!used_stable_correction)
-                    {
-                        absolute_pose_priors.clear();
-                        const auto pose_prior_estimates = localization_->estimatePosePriors(kf_stamp);
-                        for (const auto &estimate : pose_prior_estimates)
-                        {
-                            absolute_pose_priors.push_back(make_prior(estimate.T_MB, true));
-                        }
+                            "Localization relocalization trigger: history_frames=%zu support=%zu map_odom_trans_error=%.3f m map_odom_rot_error=%.1f deg",
+                            decision.relocalization->frame_support,
+                            decision.relocalization->support_count,
+                            decision.relocalization->translation_error_m,
+                            decision.relocalization->rotation_error_rad * 180.0 / M_PI);
                     }
                 }
             }
@@ -875,9 +794,11 @@ private:
                 }
             }
 
-            if (node_cfg_.localization_mode && localization_bootstrapped_)
+            if (localization_controller_ &&
+                localization_controller_->state() ==
+                    visual_inertial_localization::LocalizationState::Localized)
             {
-                localization_T_map_odom_ = T_map_odom;
+                localization_controller_->updateMapOdomEstimate(T_map_odom);
             }
 
             have_map_odom_.store(true);
@@ -1008,8 +929,7 @@ private:
     visual_inertial::OptimizationNodeConfig node_cfg_;
     bool localization_use_tag_priors_{false};
     std::unique_ptr<visual_inertial_localization::LocalizationModule> localization_;
-    bool localization_bootstrapped_{false};
-    Eigen::Isometry3d localization_T_map_odom_ = Eigen::Isometry3d::Identity();
+    std::unique_ptr<visual_inertial_localization::LocalizationController> localization_controller_;
 
     rclcpp::TimerBase::SharedPtr tf_timer_;
 
