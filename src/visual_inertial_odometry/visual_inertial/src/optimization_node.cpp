@@ -390,6 +390,126 @@ public:
     }
 
 private:
+    struct PreparedOptimizationUpdate
+    {
+        KeyframeEvent event;
+        std::optional<Eigen::Isometry3d> between_meas;
+        std::vector<AbsolutePosePrior> absolute_pose_priors;
+        std::optional<Eigen::Isometry3d> T_WB_init_override;
+        std::optional<Eigen::Isometry3d> T_WB_anchor_override;
+        std::optional<visual_inertial_localization::LocalizationDecision> localization_decision;
+    };
+
+    bool hasMalformedTrackPayload_(const visual_inertial::msg::Keyframe &msg) const
+    {
+        return (msg.u_l.size() != msg.track_ids.size()) ||
+               (msg.v_l.size() != msg.track_ids.size()) ||
+               (msg.u_r.size() != msg.track_ids.size()) ||
+               (msg.v_r.size() != msg.track_ids.size()) ||
+               (msg.has_right.size() != msg.track_ids.size());
+    }
+
+    void logMalformedTrackPayload_(const visual_inertial::msg::Keyframe &msg) const
+    {
+        RCLCPP_WARN(
+            get_logger(),
+            "Malformed keyframe payload kf_id=%lu: track_ids=%zu u_l=%zu v_l=%zu u_r=%zu v_r=%zu has_right=%zu has_imu=%d pim_bytes=%zu",
+            static_cast<unsigned long>(msg.kf_id),
+            msg.track_ids.size(),
+            msg.u_l.size(),
+            msg.v_l.size(),
+            msg.u_r.size(),
+            msg.v_r.size(),
+            msg.has_right.size(),
+            static_cast<int>(msg.has_imu),
+            msg.pim_bytes.size());
+    }
+
+    PreparedOptimizationUpdate prepareOptimizationUpdate_(
+        const visual_inertial::msg::Keyframe &msg) const
+    {
+        PreparedOptimizationUpdate update;
+        update.event = toKeyframeEvent(msg);
+
+        if (update.event.has_vo_between)
+        {
+            update.between_meas = update.event.T_Bkm1_Bk;
+        }
+
+        if (!node_cfg_.localization_mode ||
+            !localization_ ||
+            !localization_use_tag_priors_)
+        {
+            return update;
+        }
+
+        update.localization_decision = localization_->processKeyframe(
+            rclcpp::Time(msg.header.stamp).nanoseconds(),
+            update.event.T_OB);
+
+        for (const auto &prior : update.localization_decision->optimizer_inputs.absolute_pose_priors)
+        {
+            update.absolute_pose_priors.push_back(toAbsolutePosePrior(prior));
+        }
+        update.T_WB_init_override =
+            update.localization_decision->optimizer_inputs.T_WB_init_override;
+        update.T_WB_anchor_override =
+            update.localization_decision->optimizer_inputs.T_WB_anchor_override;
+
+        return update;
+    }
+
+    void applyLocalizationDecision_(
+        const PreparedOptimizationUpdate &update,
+        const std::shared_ptr<Optimizer> &opt)
+    {
+        if (!update.localization_decision.has_value())
+        {
+            return;
+        }
+
+        const auto &decision = *update.localization_decision;
+
+        if (decision.action == visual_inertial_localization::LocalizationAction::Bootstrap)
+        {
+            opt->reset();
+            if (decision.bootstrap.has_value())
+            {
+                RCLCPP_INFO(
+                    get_logger(),
+                    "Localization bootstrap established: support=%zu score=%.1f; switching from odometry-only to map-localized tracking",
+                    decision.bootstrap->support_count,
+                    decision.bootstrap->score);
+            }
+        }
+        else if (decision.waiting_for_bootstrap)
+        {
+            RCLCPP_INFO_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Localization mode has not seen a stable mapped tag yet; running in pure odometry until first bootstrap");
+        }
+
+        if (decision.action == visual_inertial_localization::LocalizationAction::Relocalize)
+        {
+            opt->reset();
+            RCLCPP_INFO(
+                get_logger(),
+                "Localization graph reset for relocalization at incoming kf_id=%lu",
+                static_cast<unsigned long>(update.event.kf_id));
+
+            if (decision.relocalization.has_value())
+            {
+                RCLCPP_WARN_THROTTLE(
+                    get_logger(), *get_clock(), 2000,
+                    "Localization relocalization trigger: history_frames=%zu support=%zu map_odom_trans_error=%.3f m map_odom_rot_error=%.1f deg",
+                    decision.relocalization->frame_support,
+                    decision.relocalization->support_count,
+                    decision.relocalization->translation_error_m,
+                    decision.relocalization->rotation_error_rad * 180.0 / M_PI);
+            }
+        }
+    }
+
     void mergeLandmarksIntoCache_(const std::vector<LandmarkEstimate> &lms)
     {
         std::lock_guard<std::mutex> lk(lm_mtx_);
@@ -559,102 +679,21 @@ private:
             if (!opt)
                 continue;
 
-            const bool malformed_track_payload =
-                (msg.u_l.size() != msg.track_ids.size()) ||
-                (msg.v_l.size() != msg.track_ids.size()) ||
-                (msg.u_r.size() != msg.track_ids.size()) ||
-                (msg.v_r.size() != msg.track_ids.size()) ||
-                (msg.has_right.size() != msg.track_ids.size());
-
-            if (malformed_track_payload)
+            if (hasMalformedTrackPayload_(msg))
             {
-                RCLCPP_WARN(
-                    get_logger(),
-                    "Malformed keyframe payload kf_id=%lu: track_ids=%zu u_l=%zu v_l=%zu u_r=%zu v_r=%zu has_right=%zu has_imu=%d pim_bytes=%zu",
-                    static_cast<unsigned long>(msg.kf_id),
-                    msg.track_ids.size(),
-                    msg.u_l.size(),
-                    msg.v_l.size(),
-                    msg.u_r.size(),
-                    msg.v_r.size(),
-                    msg.has_right.size(),
-                    static_cast<int>(msg.has_imu),
-                    msg.pim_bytes.size());
+                logMalformedTrackPayload_(msg);
             }
 
-            const auto ev = toKeyframeEvent(msg);
-            std::optional<Eigen::Isometry3d> between_meas = std::nullopt;
-            if (ev.has_vo_between)
-            {
-                between_meas = ev.T_Bkm1_Bk;
-            }
-
-            std::vector<AbsolutePosePrior> absolute_pose_priors;
-            std::optional<Eigen::Isometry3d> T_WB_init_override = std::nullopt;
-            std::optional<Eigen::Isometry3d> T_WB_anchor_override = std::nullopt;
-            if (node_cfg_.localization_mode &&
-                localization_ &&
-                localization_use_tag_priors_)
-            {
-                const auto decision =
-                    localization_->processKeyframe(
-                        rclcpp::Time(msg.header.stamp).nanoseconds(),
-                        ev.T_OB);
-
-                for (const auto &prior : decision.optimizer_inputs.absolute_pose_priors)
-                {
-                    absolute_pose_priors.push_back(toAbsolutePosePrior(prior));
-                }
-                T_WB_init_override = decision.optimizer_inputs.T_WB_init_override;
-                T_WB_anchor_override = decision.optimizer_inputs.T_WB_anchor_override;
-
-                if (decision.action == visual_inertial_localization::LocalizationAction::Bootstrap)
-                {
-                    opt->reset();
-                    if (decision.bootstrap.has_value())
-                    {
-                        RCLCPP_INFO(
-                            get_logger(),
-                            "Localization bootstrap established: support=%zu score=%.1f; switching from odometry-only to map-localized tracking",
-                            decision.bootstrap->support_count,
-                            decision.bootstrap->score);
-                    }
-                }
-                else if (decision.waiting_for_bootstrap)
-                {
-                    RCLCPP_INFO_THROTTLE(
-                        get_logger(), *get_clock(), 2000,
-                        "Localization mode has not seen a stable mapped tag yet; running in pure odometry until first bootstrap");
-                }
-
-                if (decision.action == visual_inertial_localization::LocalizationAction::Relocalize)
-                {
-                    opt->reset();
-                    RCLCPP_INFO(
-                        get_logger(),
-                        "Localization graph reset for relocalization at incoming kf_id=%lu",
-                        static_cast<unsigned long>(ev.kf_id));
-
-                    if (decision.relocalization.has_value())
-                    {
-                        RCLCPP_WARN_THROTTLE(
-                            get_logger(), *get_clock(), 2000,
-                            "Localization relocalization trigger: history_frames=%zu support=%zu map_odom_trans_error=%.3f m map_odom_rot_error=%.1f deg",
-                            decision.relocalization->frame_support,
-                            decision.relocalization->support_count,
-                            decision.relocalization->translation_error_m,
-                            decision.relocalization->rotation_error_rad * 180.0 / M_PI);
-                    }
-                }
-            }
+            const auto update = prepareOptimizationUpdate_(msg);
+            applyLocalizationDecision_(update, opt);
 
             const auto optimize_start = std::chrono::steady_clock::now();
             const auto res = opt->push(
-                ev,
-                between_meas,
-                absolute_pose_priors,
-                T_WB_init_override,
-                T_WB_anchor_override);
+                update.event,
+                update.between_meas,
+                update.absolute_pose_priors,
+                update.T_WB_init_override,
+                update.T_WB_anchor_override);
             const auto optimize_end = std::chrono::steady_clock::now();
             const double optimize_ms =
                 std::chrono::duration<double, std::milli>(optimize_end - optimize_start).count();
