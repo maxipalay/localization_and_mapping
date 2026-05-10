@@ -34,7 +34,6 @@
 #include <stdexcept>
 #include <algorithm>
 #include <chrono>
-#include <unordered_map>
 #include <vector>
 
 #include <visual_inertial/msg/imu_bias.hpp>
@@ -348,22 +347,12 @@ public:
         {
             auto lm_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile();
             lm_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(node_cfg_.landmark_topic, lm_qos);
-
-            // Timer (publish at constant rate, independent of keyframes)
-            lm_timer_ = create_wall_timer(
-                std::chrono::duration<double>(1.0 / std::max(1e-6, node_cfg_.landmark_pub_hz)),
-                [this]()
-                { this->publishLandmarksPointCloud_(); });
         }
-
-        // Optional smoothing params for TF and landmark caching
-        lm_cache_max_ = node_cfg_.lm_cache_max;
-        lm_fetch_max_ = node_cfg_.lm_fetch_max;
 
         if (node_cfg_.publish_optimized_landmarks)
         {
-            RCLCPP_INFO(get_logger(), "Optimized landmark publishing enabled on '%s' @ %.2f Hz",
-                        node_cfg_.landmark_topic.c_str(), node_cfg_.landmark_pub_hz);
+            RCLCPP_INFO(get_logger(), "Optimized landmark publishing enabled on '%s'",
+                        node_cfg_.landmark_topic.c_str());
         }
         else
         {
@@ -510,60 +499,167 @@ private:
         }
     }
 
-    void mergeLandmarksIntoCache_(const std::vector<LandmarkEstimate> &lms)
+    void logOptimizationUpdate_(
+        const OptimizationResult &result,
+        double optimize_ms) const
     {
-        std::lock_guard<std::mutex> lk(lm_mtx_);
-
-        for (const auto &e : lms)
-        {
-            const uint32_t tid = static_cast<uint32_t>(e.tid);
-            auto &slot = lm_cache_[tid];
-            slot.p_map = e.p_W;
-            slot.last_seen_kf = e.last_seen_kf;
-        }
-
-        pruneLandmarkCacheLocked_();
+        RCLCPP_INFO(
+            get_logger(),
+            "Optimization update kf_id=%lu took %.1f ms "
+            "(window=%d stereo=%d imu=%d between=%d prior=%d "
+            "vo_meas=%d vo_used=%d vo_skip=%d vo_q=%.3f vo_sigma=%.3f imu_only=%d)",
+            static_cast<unsigned long>(result.kf_id),
+            optimize_ms,
+            result.stats.num_keyframes_in_window,
+            result.stats.num_stereo_factors_added,
+            result.stats.num_imu_factors_added,
+            result.stats.num_between_factors_added,
+            result.stats.num_prior_factors_added,
+            result.stats.had_vo_between_measurement ? 1 : 0,
+            result.stats.used_vo_between_factor ? 1 : 0,
+            result.stats.skipped_vo_between_factor ? 1 : 0,
+            result.stats.vo_between_quality,
+            result.stats.vo_between_sigma_scale,
+            result.stats.imu_only_update ? 1 : 0);
     }
 
-    void pruneLandmarkCacheLocked_()
+    void publishImuBias_(
+        const visual_inertial::msg::Keyframe &msg,
+        const OptimizationResult &result)
     {
-        if (lm_cache_.size() <= lm_cache_max_)
+        visual_inertial::msg::ImuBias bmsg;
+        bmsg.header.stamp = msg.header.stamp;
+        bmsg.header.frame_id = "base_link";
+        bmsg.kf_id = result.kf_id;
+
+        bmsg.accel_bias.x = result.bias_opt.accel.x();
+        bmsg.accel_bias.y = result.bias_opt.accel.y();
+        bmsg.accel_bias.z = result.bias_opt.accel.z();
+
+        bmsg.gyro_bias.x = result.bias_opt.gyro.x();
+        bmsg.gyro_bias.y = result.bias_opt.gyro.y();
+        bmsg.gyro_bias.z = result.bias_opt.gyro.z();
+
+        bias_pub_->publish(bmsg);
+    }
+
+    void publishOptimizationResult_(
+        const visual_inertial::msg::Keyframe &msg,
+        const OptimizationResult &result)
+    {
+        if (!optimization_result_pub_)
+        {
             return;
-        if (lm_cache_max_ == 0)
-        {
-            lm_cache_.clear();
-            return;
         }
 
-        // Build list of (tid, last_seen)
-        std::vector<std::pair<uint32_t, uint64_t>> items;
-        items.reserve(lm_cache_.size());
-        for (const auto &kv : lm_cache_)
+        visual_inertial::msg::OptimizationResult opt_msg;
+        opt_msg.header.stamp = msg.header.stamp;
+        opt_msg.header.frame_id = node_cfg_.map_frame_id;
+        opt_msg.kf_id = result.kf_id;
+        opt_msg.t_s = result.t_s;
+        opt_msg.pose_wc_opt = isoToPoseMsg(result.T_WC_opt);
+        opt_msg.pose_wb_opt = isoToPoseMsg(result.T_WB_opt);
+        opt_msg.active_keyframe_poses.reserve(result.active_keyframe_poses.size());
+        for (const auto &active_pose : result.active_keyframe_poses)
         {
-            items.emplace_back(kv.first, kv.second.last_seen_kf);
+            visual_inertial::msg::OptimizedKeyframePose active_pose_msg;
+            active_pose_msg.kf_id = active_pose.kf_id;
+            active_pose_msg.pose_wc_opt = isoToPoseMsg(active_pose.T_WC_opt);
+            active_pose_msg.pose_wb_opt = isoToPoseMsg(active_pose.T_WB_opt);
+            opt_msg.active_keyframe_poses.push_back(std::move(active_pose_msg));
+        }
+        opt_msg.stats.num_keyframes_in_window = result.stats.num_keyframes_in_window;
+        opt_msg.stats.num_landmarks_alive = result.stats.num_landmarks_alive;
+        opt_msg.stats.num_landmarks_created = result.stats.num_landmarks_created;
+        opt_msg.stats.num_stereo_factors_added = result.stats.num_stereo_factors_added;
+        opt_msg.stats.num_imu_factors_added = result.stats.num_imu_factors_added;
+        opt_msg.stats.num_between_factors_added = result.stats.num_between_factors_added;
+        opt_msg.stats.num_prior_factors_added = result.stats.num_prior_factors_added;
+        opt_msg.stats.had_vo_between_measurement = result.stats.had_vo_between_measurement;
+        opt_msg.stats.used_vo_between_factor = result.stats.used_vo_between_factor;
+        opt_msg.stats.skipped_vo_between_factor = result.stats.skipped_vo_between_factor;
+        opt_msg.stats.vo_between_quality = result.stats.vo_between_quality;
+        opt_msg.stats.vo_between_sigma_scale = result.stats.vo_between_sigma_scale;
+        opt_msg.stats.imu_only_update = result.stats.imu_only_update;
+        opt_msg.stats.update_iterations = result.stats.update_iterations;
+        opt_msg.stats.update_intermediate_steps = result.stats.update_intermediate_steps;
+        opt_msg.stats.update_nonlinear_variables = result.stats.update_nonlinear_variables;
+        opt_msg.stats.update_linear_variables = result.stats.update_linear_variables;
+        opt_msg.stats.final_error = result.stats.final_error;
+        opt_msg.stats.has_error_before = result.stats.has_error_before;
+        opt_msg.stats.error_before = result.stats.error_before;
+        opt_msg.stats.has_error_after = result.stats.has_error_after;
+        opt_msg.stats.error_after = result.stats.error_after;
+        opt_msg.stats.variables_relinearized = result.stats.variables_relinearized;
+        opt_msg.stats.variables_reeliminated = result.stats.variables_reeliminated;
+        opt_msg.stats.factors_recalculated = result.stats.factors_recalculated;
+        opt_msg.stats.cliques = result.stats.cliques;
+        opt_msg.has_velocity = result.has_velocity;
+        opt_msg.velocity_opt.x = result.velocity_opt.x();
+        opt_msg.velocity_opt.y = result.velocity_opt.y();
+        opt_msg.velocity_opt.z = result.velocity_opt.z();
+        opt_msg.accel_bias.x = result.bias_opt.accel.x();
+        opt_msg.accel_bias.y = result.bias_opt.accel.y();
+        opt_msg.accel_bias.z = result.bias_opt.accel.z();
+        opt_msg.gyro_bias.x = result.bias_opt.gyro.x();
+        opt_msg.gyro_bias.y = result.bias_opt.gyro.y();
+        opt_msg.gyro_bias.z = result.bias_opt.gyro.z();
+        opt_msg.has_pose_wb_covariance = result.has_pose_wb_covariance;
+        opt_msg.pose_wb_covariance = result.pose_wb_covariance;
+        opt_msg.has_velocity_covariance = result.has_velocity_covariance;
+        opt_msg.velocity_covariance = result.velocity_covariance;
+        opt_msg.has_bias_covariance = result.has_bias_covariance;
+        opt_msg.bias_covariance = result.bias_covariance;
+        optimization_result_pub_->publish(opt_msg);
+    }
+
+    Eigen::Isometry3d updateMapOdomTarget_(
+        const visual_inertial::msg::Keyframe &msg,
+        const OptimizationResult &result)
+    {
+        const Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_odom_body);
+        const Eigen::Isometry3d T_map_B = result.T_WB_opt;
+        const Eigen::Isometry3d T_map_odom = T_map_B * T_odom_B.inverse();
+
+        {
+            std::lock_guard<std::mutex> lk(tf_mtx_);
+            T_map_odom_target_ = T_map_odom;
+            have_target_ = true;
+
+            if (!have_filt_)
+            {
+                T_map_odom_filt_ = T_map_odom_target_;
+                have_filt_ = true;
+                last_filt_update_ = this->now();
+            }
         }
 
-        // Find cutoff for newest lm_cache_max_ by last_seen
-        auto nth = items.end() - static_cast<std::ptrdiff_t>(lm_cache_max_);
-        std::nth_element(items.begin(), nth, items.end(),
-                         [](const auto &a, const auto &b)
-                         { return a.second < b.second; });
-        const uint64_t cutoff = nth->second;
+        return T_map_odom;
+    }
 
-        // Erase everything older than cutoff
-        for (auto it = lm_cache_.begin(); it != lm_cache_.end();)
+    void updateLocalizationMapOdom_(const Eigen::Isometry3d &T_map_odom)
+    {
+        if (localization_ &&
+            localization_->state() ==
+                visual_inertial_localization::LocalizationState::Localized)
         {
-            if (it->second.last_seen_kf < cutoff)
-                it = lm_cache_.erase(it);
-            else
-                ++it;
+            localization_->updateMapOdomEstimate(T_map_odom);
         }
+    }
 
-        // If still too big due to ties, erase arbitrary extras
-        while (lm_cache_.size() > lm_cache_max_)
-        {
-            lm_cache_.erase(lm_cache_.begin());
-        }
+    void handleOptimizationResult_(
+        const visual_inertial::msg::Keyframe &msg,
+        const OptimizationResult &result,
+        const std::shared_ptr<Optimizer> &opt,
+        double optimize_ms)
+    {
+        logOptimizationUpdate_(result, optimize_ms);
+        publishImuBias_(msg, result);
+        publishOptimizationResult_(msg, result);
+        publishLandmarks_(opt);
+        const auto T_map_odom = updateMapOdomTarget_(msg, result);
+        updateLocalizationMapOdom_(T_map_odom);
+        have_map_odom_.store(true);
     }
     void maybeInitRigAndOptimizer_()
     {
@@ -700,142 +796,7 @@ private:
             if (!res)
                 continue;
 
-            RCLCPP_INFO(
-                get_logger(),
-                "Optimization update kf_id=%lu took %.1f ms "
-                "(window=%d stereo=%d imu=%d between=%d prior=%d "
-                "vo_meas=%d vo_used=%d vo_skip=%d vo_q=%.3f vo_sigma=%.3f imu_only=%d)",
-                static_cast<unsigned long>(res->kf_id),
-                optimize_ms,
-                res->stats.num_keyframes_in_window,
-                res->stats.num_stereo_factors_added,
-                res->stats.num_imu_factors_added,
-                res->stats.num_between_factors_added,
-                res->stats.num_prior_factors_added,
-                res->stats.had_vo_between_measurement ? 1 : 0,
-                res->stats.used_vo_between_factor ? 1 : 0,
-                res->stats.skipped_vo_between_factor ? 1 : 0,
-                res->stats.vo_between_quality,
-                res->stats.vo_between_sigma_scale,
-                res->stats.imu_only_update ? 1 : 0);
-
-            // ---- Update persistent landmark cache ----
-            {
-                // Get current smoother landmark estimates (alive in window right now)
-                const auto lms = opt->getLandmarks(lm_fetch_max_);
-                mergeLandmarksIntoCache_(lms);
-            }
-
-            // publishing imu bias
-            visual_inertial::msg::ImuBias bmsg;
-            bmsg.header.stamp = msg.header.stamp; // same stamp as keyframe
-            bmsg.header.frame_id = "base_link";   // or your body frame name
-            bmsg.kf_id = res->kf_id;
-
-            bmsg.accel_bias.x = res->bias_opt.accel.x();
-            bmsg.accel_bias.y = res->bias_opt.accel.y();
-            bmsg.accel_bias.z = res->bias_opt.accel.z();
-
-            bmsg.gyro_bias.x = res->bias_opt.gyro.x();
-            bmsg.gyro_bias.y = res->bias_opt.gyro.y();
-            bmsg.gyro_bias.z = res->bias_opt.gyro.z();
-
-            bias_pub_->publish(bmsg);
-
-            visual_inertial::msg::OptimizationResult opt_msg;
-            opt_msg.header.stamp = msg.header.stamp;
-            opt_msg.header.frame_id = node_cfg_.map_frame_id;
-            opt_msg.kf_id = res->kf_id;
-            opt_msg.t_s = res->t_s;
-            opt_msg.pose_wc_opt = isoToPoseMsg(res->T_WC_opt);
-            opt_msg.pose_wb_opt = isoToPoseMsg(res->T_WB_opt);
-            opt_msg.active_keyframe_poses.reserve(res->active_keyframe_poses.size());
-            for (const auto &active_pose : res->active_keyframe_poses)
-            {
-                visual_inertial::msg::OptimizedKeyframePose active_pose_msg;
-                active_pose_msg.kf_id = active_pose.kf_id;
-                active_pose_msg.pose_wc_opt = isoToPoseMsg(active_pose.T_WC_opt);
-                active_pose_msg.pose_wb_opt = isoToPoseMsg(active_pose.T_WB_opt);
-                opt_msg.active_keyframe_poses.push_back(std::move(active_pose_msg));
-            }
-            opt_msg.stats.num_keyframes_in_window = res->stats.num_keyframes_in_window;
-            opt_msg.stats.num_landmarks_alive = res->stats.num_landmarks_alive;
-            opt_msg.stats.num_landmarks_created = res->stats.num_landmarks_created;
-            opt_msg.stats.num_stereo_factors_added = res->stats.num_stereo_factors_added;
-            opt_msg.stats.num_imu_factors_added = res->stats.num_imu_factors_added;
-            opt_msg.stats.num_between_factors_added = res->stats.num_between_factors_added;
-            opt_msg.stats.num_prior_factors_added = res->stats.num_prior_factors_added;
-            opt_msg.stats.had_vo_between_measurement = res->stats.had_vo_between_measurement;
-            opt_msg.stats.used_vo_between_factor = res->stats.used_vo_between_factor;
-            opt_msg.stats.skipped_vo_between_factor = res->stats.skipped_vo_between_factor;
-            opt_msg.stats.vo_between_quality = res->stats.vo_between_quality;
-            opt_msg.stats.vo_between_sigma_scale = res->stats.vo_between_sigma_scale;
-            opt_msg.stats.imu_only_update = res->stats.imu_only_update;
-            opt_msg.stats.update_iterations = res->stats.update_iterations;
-            opt_msg.stats.update_intermediate_steps = res->stats.update_intermediate_steps;
-            opt_msg.stats.update_nonlinear_variables = res->stats.update_nonlinear_variables;
-            opt_msg.stats.update_linear_variables = res->stats.update_linear_variables;
-            opt_msg.stats.final_error = res->stats.final_error;
-            opt_msg.stats.has_error_before = res->stats.has_error_before;
-            opt_msg.stats.error_before = res->stats.error_before;
-            opt_msg.stats.has_error_after = res->stats.has_error_after;
-            opt_msg.stats.error_after = res->stats.error_after;
-            opt_msg.stats.variables_relinearized = res->stats.variables_relinearized;
-            opt_msg.stats.variables_reeliminated = res->stats.variables_reeliminated;
-            opt_msg.stats.factors_recalculated = res->stats.factors_recalculated;
-            opt_msg.stats.cliques = res->stats.cliques;
-            opt_msg.has_velocity = res->has_velocity;
-            opt_msg.velocity_opt.x = res->velocity_opt.x();
-            opt_msg.velocity_opt.y = res->velocity_opt.y();
-            opt_msg.velocity_opt.z = res->velocity_opt.z();
-            opt_msg.accel_bias.x = res->bias_opt.accel.x();
-            opt_msg.accel_bias.y = res->bias_opt.accel.y();
-            opt_msg.accel_bias.z = res->bias_opt.accel.z();
-            opt_msg.gyro_bias.x = res->bias_opt.gyro.x();
-            opt_msg.gyro_bias.y = res->bias_opt.gyro.y();
-            opt_msg.gyro_bias.z = res->bias_opt.gyro.z();
-            opt_msg.has_pose_wb_covariance = res->has_pose_wb_covariance;
-            opt_msg.pose_wb_covariance = res->pose_wb_covariance;
-            opt_msg.has_velocity_covariance = res->has_velocity_covariance;
-            opt_msg.velocity_covariance = res->velocity_covariance;
-            opt_msg.has_bias_covariance = res->has_bias_covariance;
-            opt_msg.bias_covariance = res->bias_covariance;
-            if (optimization_result_pub_)
-                optimization_result_pub_->publish(opt_msg);
-
-            // Update cached map->odom correction (timer will broadcast it at constant rate)
-            // const Eigen::Isometry3d T_odom_C = poseMsgToIso(msg.pose_odom_body);
-            // const Eigen::Isometry3d T_map_C = res->T_WC_opt;
-            // const Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_odom_body); // now odom<-body
-            // const Eigen::Isometry3d T_map_B = res->T_WB_opt;
-
-            // const Eigen::Isometry3d T_map_odom = T_map_B * T_odom_B.inverse();
-            Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_odom_body); // odom<-body (from KF msg)
-            Eigen::Isometry3d T_map_B = res->T_WB_opt;              // map<-body (optimizer)
-
-            Eigen::Isometry3d T_map_odom = T_map_B * T_odom_B.inverse();
-
-            {
-                std::lock_guard<std::mutex> lk(tf_mtx_);
-                T_map_odom_target_ = T_map_odom;
-                have_target_ = true;
-
-                if (!have_filt_)
-                {
-                    T_map_odom_filt_ = T_map_odom_target_;
-                    have_filt_ = true;
-                    last_filt_update_ = this->now();
-                }
-            }
-
-            if (localization_ &&
-                localization_->state() ==
-                    visual_inertial_localization::LocalizationState::Localized)
-            {
-                localization_->updateMapOdomEstimate(T_map_odom);
-            }
-
-            have_map_odom_.store(true);
+            handleOptimizationResult_(msg, *res, opt, optimize_ms);
         }
     }
 
@@ -884,44 +845,33 @@ private:
         tf_broadcaster_->sendTransform(tf);
     }
 
-    // Add this method to OptimizationNode (private:)
-    void publishLandmarksPointCloud_()
+    void publishLandmarks_(const std::shared_ptr<Optimizer> &opt)
     {
         if (!lm_pub_)
             return;
 
-        // Snapshot cache under lock
-        std::vector<Eigen::Vector3d> pts;
-        pts.reserve(lm_cache_.size());
-        {
-            std::lock_guard<std::mutex> lk(lm_mtx_);
-            pts.reserve(lm_cache_.size());
-            for (const auto &kv : lm_cache_)
-            {
-                pts.push_back(kv.second.p_map);
-            }
-        }
+        const auto lms = opt->getLandmarks(node_cfg_.lm_fetch_max);
 
         sensor_msgs::msg::PointCloud2 msg;
         msg.header.stamp = this->now();
-        msg.header.frame_id = node_cfg_.map_frame_id; // usually "map"
+        msg.header.frame_id = node_cfg_.map_frame_id;
         msg.height = 1;
-        msg.width = static_cast<uint32_t>(pts.size());
+        msg.width = static_cast<uint32_t>(lms.size());
         msg.is_dense = false;
 
         sensor_msgs::PointCloud2Modifier mod(msg);
         mod.setPointCloud2FieldsByString(1, "xyz");
-        mod.resize(pts.size());
+        mod.resize(lms.size());
 
         sensor_msgs::PointCloud2Iterator<float> it_x(msg, "x");
         sensor_msgs::PointCloud2Iterator<float> it_y(msg, "y");
         sensor_msgs::PointCloud2Iterator<float> it_z(msg, "z");
 
-        for (const auto &p : pts)
+        for (const auto &lm : lms)
         {
-            *it_x = static_cast<float>(p.x());
-            *it_y = static_cast<float>(p.y());
-            *it_z = static_cast<float>(p.z());
+            *it_x = static_cast<float>(lm.p_W.x());
+            *it_y = static_cast<float>(lm.p_W.y());
+            *it_z = static_cast<float>(lm.p_W.z());
             ++it_x;
             ++it_y;
             ++it_z;
@@ -1013,20 +963,7 @@ private:
 
     rclcpp::Time last_filt_update_;
 
-    // landmark cache
-    // --- Landmark cache (persistent across window) ---
-    std::mutex lm_mtx_;
-    struct CachedLm
-    {
-        Eigen::Vector3d p_map = Eigen::Vector3d::Zero();
-        uint64_t last_seen_kf = 0;
-    };
-    std::unordered_map<uint32_t, CachedLm> lm_cache_; // tid -> cached point
-    size_t lm_cache_max_{2000};
-    size_t lm_fetch_max_{0}; // 0 = fetch all currently-available landmarks
-
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lm_pub_;
-    rclcpp::TimerBase::SharedPtr lm_timer_;
 };
 
 int main(int argc, char **argv)
