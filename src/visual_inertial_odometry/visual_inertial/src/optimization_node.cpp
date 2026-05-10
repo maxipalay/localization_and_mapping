@@ -219,7 +219,7 @@ public:
         param_handler_ = std::make_unique<visual_inertial::OptimizationNodeParamHandler>(*this);
         const auto &params = param_handler_->params();
         node_cfg_ = params.node;
-        opt_cfg_ = params.optimizer;
+        optimization_ = std::make_unique<OptimizationModule>(params.optimizer);
 
         if (node_cfg_.localization_mode)
         {
@@ -450,7 +450,7 @@ private:
 
     void applyLocalizationDecision_(
         const PreparedOptimizationUpdate &update,
-        const std::shared_ptr<Optimizer> &opt)
+        OptimizationModule &optimization)
     {
         if (!update.localization_decision.has_value())
         {
@@ -461,7 +461,7 @@ private:
 
         if (decision.action == visual_inertial_localization::LocalizationAction::Bootstrap)
         {
-            opt->reset();
+            optimization.reset();
             if (decision.bootstrap.has_value())
             {
                 RCLCPP_INFO(
@@ -480,7 +480,7 @@ private:
 
         if (decision.action == visual_inertial_localization::LocalizationAction::Relocalize)
         {
-            opt->reset();
+            optimization.reset();
             RCLCPP_INFO(
                 get_logger(),
                 "Localization graph reset for relocalization at incoming kf_id=%lu",
@@ -650,20 +650,20 @@ private:
     void handleOptimizationResult_(
         const visual_inertial::msg::Keyframe &msg,
         const OptimizationResult &result,
-        const std::shared_ptr<Optimizer> &opt,
+        OptimizationModule &optimization,
         double optimize_ms)
     {
         logOptimizationUpdate_(result, optimize_ms);
         publishImuBias_(msg, result);
         publishOptimizationResult_(msg, result);
-        publishLandmarks_(opt);
+        publishLandmarks_(optimization);
         const auto T_map_odom = updateMapOdomTarget_(msg, result);
         updateLocalizationMapOdom_(T_map_odom);
         have_map_odom_.store(true);
     }
     void maybeInitRigAndOptimizer_()
     {
-        if (rig_ready_)
+        if (optimization_->ready())
             return;
         if (!left_info_.has_value() || !right_info_.has_value())
             return;
@@ -678,13 +678,8 @@ private:
             return;
         }
 
-        opt_cfg_.rig = rig;
-
-        {
-            std::lock_guard<std::mutex> lk(opt_mtx_);
-            optimizer_ = std::make_shared<Optimizer>(opt_cfg_);
-        }
-        rig_ready_ = true;
+        if (!optimization_->initializeRig(rig))
+            return;
 
         RCLCPP_INFO(get_logger(),
                     "Stereo rig ready: fx=%.3f fy=%.3f cx=%.3f cy=%.3f baseline=%.5f (m). Optimizer initialized.",
@@ -712,16 +707,17 @@ private:
         {
             const auto tf = tf_buffer_->lookupTransform(
                 node_cfg_.body_frame_id, camera_frame, tf2::TimePointZero);
-            opt_cfg_.T_BC = transformMsgToIso(tf.transform);
+            optimization_->setBodyCameraExtrinsic(transformMsgToIso(tf.transform));
             t_bc_resolved_from_tf_ = true;
 
-            Eigen::Quaterniond q(opt_cfg_.T_BC.rotation());
+            const auto &T_BC = optimization_->config().T_BC;
+            Eigen::Quaterniond q(T_BC.rotation());
             q.normalize();
             RCLCPP_INFO(
                 get_logger(),
                 "Resolved T_BC from TF: %s <- %s, t=[%.6f %.6f %.6f], q_xyzw=[%.6f %.6f %.6f %.6f]",
                 node_cfg_.body_frame_id.c_str(), camera_frame.c_str(),
-                opt_cfg_.T_BC.translation().x(), opt_cfg_.T_BC.translation().y(), opt_cfg_.T_BC.translation().z(),
+                T_BC.translation().x(), T_BC.translation().y(), T_BC.translation().z(),
                 q.x(), q.y(), q.z(), q.w());
             return true;
         }
@@ -757,7 +753,7 @@ private:
                             kf_q_.size());
             }
 
-            if (!rig_ready_)
+            if (!optimization_->ready())
             {
                 static uint64_t warn_ctr = 0;
                 if ((warn_ctr++ % 50) == 0)
@@ -767,24 +763,16 @@ private:
                 continue;
             }
 
-            std::shared_ptr<Optimizer> opt;
-            {
-                std::lock_guard<std::mutex> lk(opt_mtx_);
-                opt = optimizer_;
-            }
-            if (!opt)
-                continue;
-
             if (hasMalformedTrackPayload_(msg))
             {
                 logMalformedTrackPayload_(msg);
             }
 
             const auto update = prepareOptimizationUpdate_(msg);
-            applyLocalizationDecision_(update, opt);
+            applyLocalizationDecision_(update, *optimization_);
 
             const auto optimize_start = std::chrono::steady_clock::now();
-            const auto res = opt->push(
+            const auto res = optimization_->push(
                 update.event,
                 update.between_meas,
                 update.absolute_pose_priors,
@@ -796,7 +784,7 @@ private:
             if (!res)
                 continue;
 
-            handleOptimizationResult_(msg, *res, opt, optimize_ms);
+            handleOptimizationResult_(msg, *res, *optimization_, optimize_ms);
         }
     }
 
@@ -845,12 +833,12 @@ private:
         tf_broadcaster_->sendTransform(tf);
     }
 
-    void publishLandmarks_(const std::shared_ptr<Optimizer> &opt)
+    void publishLandmarks_(OptimizationModule &optimization)
     {
         if (!lm_pub_)
             return;
 
-        const auto lms = opt->getLandmarks(node_cfg_.lm_fetch_max);
+        const auto lms = optimization.getLandmarks(node_cfg_.lm_fetch_max);
 
         sensor_msgs::msg::PointCloud2 msg;
         msg.header.stamp = this->now();
@@ -936,12 +924,9 @@ private:
     std::mutex calib_mtx_;
     std::optional<sensor_msgs::msg::CameraInfo> left_info_;
     std::optional<sensor_msgs::msg::CameraInfo> right_info_;
-    std::atomic<bool> rig_ready_{false};
 
     // Backend
-    OptimizationConfig opt_cfg_;
-    std::mutex opt_mtx_;
-    std::shared_ptr<Optimizer> optimizer_;
+    std::unique_ptr<OptimizationModule> optimization_;
 
     // Queue / threading
     std::mutex q_mtx_;
