@@ -698,43 +698,29 @@ private:
         }
     }
 
-    void maybeInitRigAndOptimizer_()
+    bool haveStereoCalibration_() const
     {
-        if (optimization_->ready())
-            return;
-        if (!left_info_.has_value() || !right_info_.has_value())
-            return;
-
-        if (!maybeResolveBodyCameraExtrinsic_())
-            return;
-
-        const auto rig = makeStereoModel(*left_info_, *right_info_);
-        if (!rig.valid())
-        {
-            RCLCPP_WARN(get_logger(), "Stereo rig computed but invalid (baseline/intrinsics). Waiting...");
-            return;
-        }
-
-        if (!optimization_->initializeRig(rig))
-            return;
-
-        RCLCPP_INFO(get_logger(),
-                    "Stereo rig ready: fx=%.3f fy=%.3f cx=%.3f cy=%.3f baseline=%.5f (m). Optimizer initialized.",
-                    rig.left.fx(), rig.left.fy(), rig.left.cx(), rig.left.cy(), rig.baseline);
+        std::lock_guard<std::mutex> lk(calib_mtx_);
+        return left_info_.has_value() && right_info_.has_value();
     }
 
-    bool maybeResolveBodyCameraExtrinsic_()
+    bool ensureBodyCameraExtrinsicReady_()
     {
         if (!node_cfg_.auto_resolve_t_bc_from_tf || t_bc_resolved_from_tf_)
         {
             return true;
         }
-        if (!left_info_.has_value())
+
+        std::string camera_frame;
         {
-            return false;
+            std::lock_guard<std::mutex> lk(calib_mtx_);
+            if (!left_info_.has_value())
+            {
+                return false;
+            }
+            camera_frame = left_info_->header.frame_id;
         }
 
-        const std::string &camera_frame = left_info_->header.frame_id;
         if (camera_frame.empty())
         {
             return false;
@@ -768,17 +754,84 @@ private:
         }
     }
 
+    std::optional<CameraRig> makeCameraRig_() const
+    {
+        sensor_msgs::msg::CameraInfo left_info;
+        sensor_msgs::msg::CameraInfo right_info;
+        {
+            std::lock_guard<std::mutex> lk(calib_mtx_);
+            if (!left_info_.has_value() || !right_info_.has_value())
+            {
+                return std::nullopt;
+            }
+            left_info = *left_info_;
+            right_info = *right_info_;
+        }
+
+        auto rig = makeStereoModel(left_info, right_info);
+        if (!rig.valid())
+        {
+            return std::nullopt;
+        }
+
+        return rig;
+    }
+
+    void unsubscribeCameraInfo_()
+    {
+        left_info_sub_.reset();
+        right_info_sub_.reset();
+    }
+
+    void maybeInitRigAndOptimizer_()
+    {
+        if (optimization_->ready())
+        {
+            return;
+        }
+        if (!haveStereoCalibration_())
+        {
+            return;
+        }
+        if (!ensureBodyCameraExtrinsicReady_())
+        {
+            return;
+        }
+
+        const auto rig = makeCameraRig_();
+        if (!rig.has_value())
+        {
+            RCLCPP_WARN(get_logger(), "Stereo rig computed but invalid (baseline/intrinsics). Waiting...");
+            return;
+        }
+
+        if (!optimization_->initializeRig(*rig))
+        {
+            return;
+        }
+
+        unsubscribeCameraInfo_();
+
+        RCLCPP_INFO(get_logger(),
+                    "Stereo rig ready: fx=%.3f fy=%.3f cx=%.3f cy=%.3f baseline=%.5f (m). Optimizer initialized.",
+                    rig->left.fx(), rig->left.fy(), rig->left.cx(), rig->left.cy(), rig->baseline);
+    }
+
     void onLeftCameraInfo_(sensor_msgs::msg::CameraInfo::SharedPtr msg)
     {
-        std::lock_guard<std::mutex> lk(calib_mtx_);
-        left_info_ = *msg;
+        {
+            std::lock_guard<std::mutex> lk(calib_mtx_);
+            left_info_ = *msg;
+        }
         maybeInitRigAndOptimizer_();
     }
 
     void onRightCameraInfo_(sensor_msgs::msg::CameraInfo::SharedPtr msg)
     {
-        std::lock_guard<std::mutex> lk(calib_mtx_);
-        right_info_ = *msg;
+        {
+            std::lock_guard<std::mutex> lk(calib_mtx_);
+            right_info_ = *msg;
+        }
         maybeInitRigAndOptimizer_();
     }
 
@@ -924,7 +977,7 @@ private:
     bool have_target_ = false;
 
     // Calibration inputs used to bring the backend online
-    std::mutex calib_mtx_;
+    mutable std::mutex calib_mtx_;
     std::optional<sensor_msgs::msg::CameraInfo> left_info_;
     std::optional<sensor_msgs::msg::CameraInfo> right_info_;
 
