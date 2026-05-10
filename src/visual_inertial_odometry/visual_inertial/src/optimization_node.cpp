@@ -409,6 +409,7 @@ private:
         std::optional<visual_inertial_localization::LocalizationDecision> localization_decision;
     };
 
+    // Keyframe update preparation and localization decisions
     bool hasMalformedTrackPayload_(const visual_inertial::msg::Keyframe &msg) const
     {
         return (msg.u_l.size() != msg.track_ids.size()) ||
@@ -604,6 +605,7 @@ private:
         updateLocalizationMapOdom_(T_map_odom);
     }
 
+    // Setup
     void initTf_()
     {
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -698,6 +700,7 @@ private:
         }
     }
 
+    // Backend bring-up
     bool haveStereoCalibration_() const
     {
         std::lock_guard<std::mutex> lk(calib_mtx_);
@@ -817,6 +820,7 @@ private:
                     rig->left.fx(), rig->left.fy(), rig->left.cx(), rig->left.cy(), rig->baseline);
     }
 
+    // ROS callbacks
     void onLeftCameraInfo_(sensor_msgs::msg::CameraInfo::SharedPtr msg)
     {
         {
@@ -846,6 +850,35 @@ private:
         q_cv_.notify_one();
     }
 
+    void onTagDetections_(apriltag_msgs::msg::AprilTagDetectionArray::SharedPtr msg)
+    {
+        if (!node_cfg_.localization_mode || !localization_ || !localization_use_tag_priors_ || !tf_buffer_ || !msg)
+        {
+            return;
+        }
+
+        const auto report = localization_->ingestDetections(
+            *msg, node_cfg_.body_frame_id, node_cfg_.odom_frame_id, *tf_buffer_);
+        const auto stable_correction =
+            localization_->estimateStableCorrection(rclcpp::Time(msg->header.stamp));
+        RCLCPP_INFO_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Localization tag ingest: detections=%zu accepted=%zu skipped_unmapped=%zu "
+            "skipped_hamming=%zu skipped_margin=%zu skipped_tf=%zu skipped_range=%zu skipped_oblique=%zu buffered=%zu stable_frames=%zu stable_support=%zu",
+            report.total_detections,
+            report.accepted,
+            report.skipped_unmapped,
+            report.skipped_hamming,
+            report.skipped_margin,
+            report.skipped_tf_lookup,
+            report.skipped_range,
+            report.skipped_oblique,
+            report.buffered,
+            stable_correction.has_value() ? stable_correction->frame_support : 0,
+            stable_correction.has_value() ? stable_correction->support_count : 0);
+    }
+
+    // Worker/runtime flow
     void workerLoop_()
     {
         while (rclcpp::ok() && !stop_.load())
@@ -903,6 +936,7 @@ private:
         }
     }
 
+    // Output publishing and map/odom state updates
     void publishMapOdomTf_()
     {
         Eigen::Isometry3d T_map_odom;
@@ -928,34 +962,6 @@ private:
         const auto lms = optimization.getLandmarks(node_cfg_.lm_fetch_max);
         lm_pub_->publish(
             makeLandmarkPointCloudMsg(lms, this->now(), node_cfg_.map_frame_id));
-    }
-
-    void onTagDetections_(apriltag_msgs::msg::AprilTagDetectionArray::SharedPtr msg)
-    {
-        if (!node_cfg_.localization_mode || !localization_ || !localization_use_tag_priors_ || !tf_buffer_ || !msg)
-        {
-            return;
-        }
-
-        const auto report = localization_->ingestDetections(
-            *msg, node_cfg_.body_frame_id, node_cfg_.odom_frame_id, *tf_buffer_);
-        const auto stable_correction =
-            localization_->estimateStableCorrection(rclcpp::Time(msg->header.stamp));
-        RCLCPP_INFO_THROTTLE(
-            get_logger(), *get_clock(), 2000,
-            "Localization tag ingest: detections=%zu accepted=%zu skipped_unmapped=%zu "
-            "skipped_hamming=%zu skipped_margin=%zu skipped_tf=%zu skipped_range=%zu skipped_oblique=%zu buffered=%zu stable_frames=%zu stable_support=%zu",
-            report.total_detections,
-            report.accepted,
-            report.skipped_unmapped,
-            report.skipped_hamming,
-            report.skipped_margin,
-            report.skipped_tf_lookup,
-            report.skipped_range,
-            report.skipped_oblique,
-            report.buffered,
-            stable_correction.has_value() ? stable_correction->frame_support : 0,
-            stable_correction.has_value() ? stable_correction->support_count : 0);
     }
 
 private:
