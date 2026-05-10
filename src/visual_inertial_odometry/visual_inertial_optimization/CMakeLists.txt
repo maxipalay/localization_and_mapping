@@ -15,6 +15,7 @@ find_package(Boost REQUIRED COMPONENTS serialization)
 
 add_library(${PROJECT_NAME} SHARED
   src/optimization.cpp
+  src/optimizer.cpp
 )
 
 ament_target_dependencies(${PROJECT_NAME}
