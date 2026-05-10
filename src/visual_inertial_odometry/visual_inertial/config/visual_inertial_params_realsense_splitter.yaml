@@ -123,11 +123,7 @@ visual_inertial_optimization:
 
     publish_optimized_landmarks: false
     landmark_topic: optimized_landmarks
-    landmark_pub_hz: 2.0
 
-    smooth_tau_s: 0.0
-    publish_tf_hz: 30.0
-    lm_cache_max: 6000
     lm_fetch_max: 0
 
     # Localization mode inputs and tuning

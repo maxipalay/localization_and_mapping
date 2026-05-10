@@ -271,7 +271,7 @@ public:
         tf_timer_ = this->create_wall_timer(
             std::chrono::duration<double>(1.0 / node_cfg_.tf_pub_rate_hz),
             [this]()
-            { this->publishFilteredTf_(); });
+            { this->publishMapOdomTf_(); });
 
         // -------- QoS --------
         auto kf_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
@@ -625,13 +625,6 @@ private:
             std::lock_guard<std::mutex> lk(tf_mtx_);
             T_map_odom_target_ = T_map_odom;
             have_target_ = true;
-
-            if (!have_filt_)
-            {
-                T_map_odom_filt_ = T_map_odom_target_;
-                have_filt_ = true;
-                last_filt_update_ = this->now();
-            }
         }
 
         return T_map_odom;
@@ -659,7 +652,6 @@ private:
         publishLandmarks_(optimization);
         const auto T_map_odom = updateMapOdomTarget_(msg, result);
         updateLocalizationMapOdom_(T_map_odom);
-        have_map_odom_.store(true);
     }
     void maybeInitRigAndOptimizer_()
     {
@@ -788,48 +780,20 @@ private:
         }
     }
 
-    void publishFilteredTf_()
+    void publishMapOdomTf_()
     {
-        Eigen::Isometry3d T_target;
-        Eigen::Isometry3d T_filt;
-        rclcpp::Time now = this->now();
+        Eigen::Isometry3d T_map_odom;
+        const rclcpp::Time now = this->now();
 
         {
             std::lock_guard<std::mutex> lk(tf_mtx_);
-            if (!have_target_ || !have_filt_)
+            if (!have_target_)
                 return;
-
-            // compute alpha from dt and time constant
-            double dt = (now - last_filt_update_).seconds();
-            if (dt <= 0.0)
-                dt = 1.0 / node_cfg_.publish_tf_hz;
-            last_filt_update_ = now;
-
-            double alpha = dt / (node_cfg_.smooth_tau_s + dt); // EMA equivalent
-            if (alpha < 0.0)
-                alpha = 0.0;
-            if (alpha > 1.0)
-                alpha = 1.0;
-
-            // --- translation EMA ---
-            T_map_odom_filt_.translation() =
-                (1.0 - alpha) * T_map_odom_filt_.translation() +
-                alpha * T_map_odom_target_.translation();
-
-            // --- rotation slerp ---
-            Eigen::Quaterniond q_old(T_map_odom_filt_.linear());
-            Eigen::Quaterniond q_new(T_map_odom_target_.linear());
-            q_old.normalize();
-            q_new.normalize();
-            Eigen::Quaterniond q_f = q_old.slerp(alpha, q_new);
-            q_f.normalize();
-            T_map_odom_filt_.linear() = q_f.toRotationMatrix();
-
-            T_filt = T_map_odom_filt_;
+            T_map_odom = T_map_odom_target_;
         }
 
         // publish TF outside the lock
-        auto tf = isoToTf(T_filt, now, node_cfg_.map_frame_id, node_cfg_.odom_frame_id);
+        auto tf = isoToTf(T_map_odom, now, node_cfg_.map_frame_id, node_cfg_.odom_frame_id);
         tf_broadcaster_->sendTransform(tf);
     }
 
@@ -918,7 +882,6 @@ private:
 
     // Latest map->odom cached transform
     std::mutex tf_mtx_;
-    std::atomic<bool> have_map_odom_{false};
 
     // Calibration state
     std::mutex calib_mtx_;
@@ -940,13 +903,9 @@ private:
     rclcpp::Publisher<visual_inertial::msg::ImuBias>::SharedPtr bias_pub_;
     rclcpp::Publisher<visual_inertial::msg::OptimizationResult>::SharedPtr optimization_result_pub_;
 
-    // smoother for t map odom
+    // latest map->odom transform from optimization
     Eigen::Isometry3d T_map_odom_target_ = Eigen::Isometry3d::Identity();
-    Eigen::Isometry3d T_map_odom_filt_ = Eigen::Isometry3d::Identity();
     bool have_target_ = false;
-    bool have_filt_ = false;
-
-    rclcpp::Time last_filt_update_;
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lm_pub_;
 };

@@ -29,10 +29,6 @@ struct OptimizationNodeConfig
     std::string optimization_result_topic{"optimization_result"};
     bool publish_optimized_landmarks{true};
     std::string landmark_topic{"optimized_landmarks"};
-    double landmark_pub_hz{2.0};
-    double smooth_tau_s{0.5};
-    double publish_tf_hz{30.0};
-    size_t lm_cache_max{2000};
     size_t lm_fetch_max{0};
 };
 

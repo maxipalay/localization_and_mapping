@@ -58,15 +58,6 @@ void OptimizationNodeParamHandler::declareNodeParams_()
         node_.declare_parameter<bool>("publish_optimized_landmarks", cfg.publish_optimized_landmarks);
     cfg.landmark_topic =
         node_.declare_parameter<std::string>("landmark_topic", cfg.landmark_topic);
-    cfg.landmark_pub_hz =
-        node_.declare_parameter<double>("landmark_pub_hz", cfg.landmark_pub_hz);
-
-    cfg.smooth_tau_s =
-        node_.declare_parameter<double>("smooth_tau_s", cfg.smooth_tau_s);
-    cfg.publish_tf_hz =
-        node_.declare_parameter<double>("publish_tf_hz", cfg.publish_tf_hz);
-    cfg.lm_cache_max = static_cast<size_t>(
-        node_.declare_parameter<int>("lm_cache_max", static_cast<int>(cfg.lm_cache_max)));
     cfg.lm_fetch_max = static_cast<size_t>(
         node_.declare_parameter<int>("lm_fetch_max", static_cast<int>(cfg.lm_fetch_max)));
 }
