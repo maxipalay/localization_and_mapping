@@ -208,6 +208,128 @@ namespace
         return rig;
     }
 
+    static visual_inertial::msg::ImuBias makeImuBiasMsg(
+        const visual_inertial::msg::Keyframe &msg,
+        const OptimizationResult &result)
+    {
+        visual_inertial::msg::ImuBias out;
+        out.header.stamp = msg.header.stamp;
+        out.header.frame_id = "base_link";
+        out.kf_id = result.kf_id;
+
+        out.accel_bias.x = result.bias_opt.accel.x();
+        out.accel_bias.y = result.bias_opt.accel.y();
+        out.accel_bias.z = result.bias_opt.accel.z();
+
+        out.gyro_bias.x = result.bias_opt.gyro.x();
+        out.gyro_bias.y = result.bias_opt.gyro.y();
+        out.gyro_bias.z = result.bias_opt.gyro.z();
+
+        return out;
+    }
+
+    static visual_inertial::msg::OptimizationResult makeOptimizationResultMsg(
+        const visual_inertial::msg::Keyframe &msg,
+        const OptimizationResult &result,
+        const std::string &map_frame_id)
+    {
+        visual_inertial::msg::OptimizationResult out;
+        out.header.stamp = msg.header.stamp;
+        out.header.frame_id = map_frame_id;
+        out.kf_id = result.kf_id;
+        out.t_s = result.t_s;
+        out.pose_wc_opt = isoToPoseMsg(result.T_WC_opt);
+        out.pose_wb_opt = isoToPoseMsg(result.T_WB_opt);
+        out.active_keyframe_poses.reserve(result.active_keyframe_poses.size());
+
+        for (const auto &active_pose : result.active_keyframe_poses)
+        {
+            visual_inertial::msg::OptimizedKeyframePose active_pose_msg;
+            active_pose_msg.kf_id = active_pose.kf_id;
+            active_pose_msg.pose_wc_opt = isoToPoseMsg(active_pose.T_WC_opt);
+            active_pose_msg.pose_wb_opt = isoToPoseMsg(active_pose.T_WB_opt);
+            out.active_keyframe_poses.push_back(std::move(active_pose_msg));
+        }
+
+        out.stats.num_keyframes_in_window = result.stats.num_keyframes_in_window;
+        out.stats.num_landmarks_alive = result.stats.num_landmarks_alive;
+        out.stats.num_landmarks_created = result.stats.num_landmarks_created;
+        out.stats.num_stereo_factors_added = result.stats.num_stereo_factors_added;
+        out.stats.num_imu_factors_added = result.stats.num_imu_factors_added;
+        out.stats.num_between_factors_added = result.stats.num_between_factors_added;
+        out.stats.num_prior_factors_added = result.stats.num_prior_factors_added;
+        out.stats.had_vo_between_measurement = result.stats.had_vo_between_measurement;
+        out.stats.used_vo_between_factor = result.stats.used_vo_between_factor;
+        out.stats.skipped_vo_between_factor = result.stats.skipped_vo_between_factor;
+        out.stats.vo_between_quality = result.stats.vo_between_quality;
+        out.stats.vo_between_sigma_scale = result.stats.vo_between_sigma_scale;
+        out.stats.imu_only_update = result.stats.imu_only_update;
+        out.stats.update_iterations = result.stats.update_iterations;
+        out.stats.update_intermediate_steps = result.stats.update_intermediate_steps;
+        out.stats.update_nonlinear_variables = result.stats.update_nonlinear_variables;
+        out.stats.update_linear_variables = result.stats.update_linear_variables;
+        out.stats.final_error = result.stats.final_error;
+        out.stats.has_error_before = result.stats.has_error_before;
+        out.stats.error_before = result.stats.error_before;
+        out.stats.has_error_after = result.stats.has_error_after;
+        out.stats.error_after = result.stats.error_after;
+        out.stats.variables_relinearized = result.stats.variables_relinearized;
+        out.stats.variables_reeliminated = result.stats.variables_reeliminated;
+        out.stats.factors_recalculated = result.stats.factors_recalculated;
+        out.stats.cliques = result.stats.cliques;
+        out.has_velocity = result.has_velocity;
+        out.velocity_opt.x = result.velocity_opt.x();
+        out.velocity_opt.y = result.velocity_opt.y();
+        out.velocity_opt.z = result.velocity_opt.z();
+        out.accel_bias.x = result.bias_opt.accel.x();
+        out.accel_bias.y = result.bias_opt.accel.y();
+        out.accel_bias.z = result.bias_opt.accel.z();
+        out.gyro_bias.x = result.bias_opt.gyro.x();
+        out.gyro_bias.y = result.bias_opt.gyro.y();
+        out.gyro_bias.z = result.bias_opt.gyro.z();
+        out.has_pose_wb_covariance = result.has_pose_wb_covariance;
+        out.pose_wb_covariance = result.pose_wb_covariance;
+        out.has_velocity_covariance = result.has_velocity_covariance;
+        out.velocity_covariance = result.velocity_covariance;
+        out.has_bias_covariance = result.has_bias_covariance;
+        out.bias_covariance = result.bias_covariance;
+
+        return out;
+    }
+
+    static sensor_msgs::msg::PointCloud2 makeLandmarkPointCloudMsg(
+        const std::vector<LandmarkEstimate> &landmarks,
+        const rclcpp::Time &stamp,
+        const std::string &frame_id)
+    {
+        sensor_msgs::msg::PointCloud2 out;
+        out.header.stamp = stamp;
+        out.header.frame_id = frame_id;
+        out.height = 1;
+        out.width = static_cast<uint32_t>(landmarks.size());
+        out.is_dense = false;
+
+        sensor_msgs::PointCloud2Modifier mod(out);
+        mod.setPointCloud2FieldsByString(1, "xyz");
+        mod.resize(landmarks.size());
+
+        sensor_msgs::PointCloud2Iterator<float> it_x(out, "x");
+        sensor_msgs::PointCloud2Iterator<float> it_y(out, "y");
+        sensor_msgs::PointCloud2Iterator<float> it_z(out, "z");
+
+        for (const auto &lm : landmarks)
+        {
+            *it_x = static_cast<float>(lm.p_W.x());
+            *it_y = static_cast<float>(lm.p_W.y());
+            *it_z = static_cast<float>(lm.p_W.z());
+            ++it_x;
+            ++it_y;
+            ++it_z;
+        }
+
+        return out;
+    }
+
 } // namespace
 
 class OptimizationNode final : public rclcpp::Node
@@ -261,113 +383,11 @@ public:
             }
         }
 
-        // -------- TF broadcaster --------
-        tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
-        tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
-        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
-
-        // -------- TF timer (constant-rate rebroadcast of latest T_map_odom) --------
-        using namespace std::chrono_literals;
-        tf_timer_ = this->create_wall_timer(
-            std::chrono::duration<double>(1.0 / node_cfg_.tf_pub_rate_hz),
-            [this]()
-            { this->publishMapOdomTf_(); });
-
-        // -------- QoS --------
-        auto kf_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
-        auto info_qos = rclcpp::SensorDataQoS();
-        auto tag_qos = rclcpp::SensorDataQoS();
-
-        // -------- Subscriptions: CameraInfo --------
-        left_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
-            node_cfg_.left_info_topic, info_qos,
-            [this](sensor_msgs::msg::CameraInfo::SharedPtr msg)
-            {
-                std::lock_guard<std::mutex> lk(calib_mtx_);
-                left_info_ = *msg;
-                maybeInitRigAndOptimizer_();
-            });
-
-        right_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
-            node_cfg_.right_info_topic, info_qos,
-            [this](sensor_msgs::msg::CameraInfo::SharedPtr msg)
-            {
-                std::lock_guard<std::mutex> lk(calib_mtx_);
-                right_info_ = *msg;
-                maybeInitRigAndOptimizer_();
-            });
-
-        if (node_cfg_.localization_mode && localization_)
-        {
-            tag_sub_ = create_subscription<apriltag_msgs::msg::AprilTagDetectionArray>(
-                localization_->config().tag_topic,
-                tag_qos,
-                [this](apriltag_msgs::msg::AprilTagDetectionArray::SharedPtr msg)
-                {
-                    this->onTagDetections_(std::move(msg));
-                });
-        }
-
-        // -------- Subscription: Keyframes --------
-        kf_sub_ = create_subscription<visual_inertial::msg::Keyframe>(
-            node_cfg_.keyframe_topic, kf_qos,
-            [this](visual_inertial::msg::Keyframe::SharedPtr msg)
-            {
-                {
-                    std::lock_guard<std::mutex> lk(q_mtx_);
-                    kf_q_.push_back(*msg);
-                    while (kf_q_.size() > node_cfg_.max_keyframe_queue)
-                        kf_q_.pop_front();
-                }
-                q_cv_.notify_one();
-            });
-
-        // -------- Worker thread --------
-        stop_.store(false);
-        worker_ = std::thread([this]()
-                              { workerLoop_(); });
-
-        RCLCPP_INFO(get_logger(),
-                    "Optimization node started. mode=%s KF=%s L_info=%s R_info=%s TF=%s->%s @ %.1f Hz",
-                    node_cfg_.operation_mode.c_str(),
-                    node_cfg_.keyframe_topic.c_str(), node_cfg_.left_info_topic.c_str(), node_cfg_.right_info_topic.c_str(),
-                    node_cfg_.map_frame_id.c_str(), node_cfg_.odom_frame_id.c_str(), node_cfg_.tf_pub_rate_hz);
-
-        // publisher for imu bias
-        auto bias_qos = rclcpp::QoS(rclcpp::KeepLast(2)).reliable().durability_volatile();
-        bias_pub_ = this->create_publisher<visual_inertial::msg::ImuBias>("imu_bias", bias_qos);
-        if (node_cfg_.publish_optimization_result)
-        {
-            optimization_result_pub_ = this->create_publisher<visual_inertial::msg::OptimizationResult>(
-                node_cfg_.optimization_result_topic, bias_qos);
-        }
-
-        // Landmark publishing
-        if (node_cfg_.publish_optimized_landmarks)
-        {
-            auto lm_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile();
-            lm_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(node_cfg_.landmark_topic, lm_qos);
-        }
-
-        if (node_cfg_.publish_optimized_landmarks)
-        {
-            RCLCPP_INFO(get_logger(), "Optimized landmark publishing enabled on '%s'",
-                        node_cfg_.landmark_topic.c_str());
-        }
-        else
-        {
-            RCLCPP_INFO(get_logger(), "Optimized landmark publishing disabled");
-        }
-
-        if (node_cfg_.publish_optimization_result)
-        {
-            RCLCPP_INFO(get_logger(), "Optimization result publishing enabled on '%s'",
-                        node_cfg_.optimization_result_topic.c_str());
-        }
-        else
-        {
-            RCLCPP_INFO(get_logger(), "Optimization result publishing disabled");
-        }
+        initTf_();
+        initPublishers_();
+        initSubscriptions_();
+        startWorker_();
+        logStartup_();
     }
 
     ~OptimizationNode() override
@@ -527,20 +547,7 @@ private:
         const visual_inertial::msg::Keyframe &msg,
         const OptimizationResult &result)
     {
-        visual_inertial::msg::ImuBias bmsg;
-        bmsg.header.stamp = msg.header.stamp;
-        bmsg.header.frame_id = "base_link";
-        bmsg.kf_id = result.kf_id;
-
-        bmsg.accel_bias.x = result.bias_opt.accel.x();
-        bmsg.accel_bias.y = result.bias_opt.accel.y();
-        bmsg.accel_bias.z = result.bias_opt.accel.z();
-
-        bmsg.gyro_bias.x = result.bias_opt.gyro.x();
-        bmsg.gyro_bias.y = result.bias_opt.gyro.y();
-        bmsg.gyro_bias.z = result.bias_opt.gyro.z();
-
-        bias_pub_->publish(bmsg);
+        bias_pub_->publish(makeImuBiasMsg(msg, result));
     }
 
     void publishOptimizationResult_(
@@ -552,65 +559,8 @@ private:
             return;
         }
 
-        visual_inertial::msg::OptimizationResult opt_msg;
-        opt_msg.header.stamp = msg.header.stamp;
-        opt_msg.header.frame_id = node_cfg_.map_frame_id;
-        opt_msg.kf_id = result.kf_id;
-        opt_msg.t_s = result.t_s;
-        opt_msg.pose_wc_opt = isoToPoseMsg(result.T_WC_opt);
-        opt_msg.pose_wb_opt = isoToPoseMsg(result.T_WB_opt);
-        opt_msg.active_keyframe_poses.reserve(result.active_keyframe_poses.size());
-        for (const auto &active_pose : result.active_keyframe_poses)
-        {
-            visual_inertial::msg::OptimizedKeyframePose active_pose_msg;
-            active_pose_msg.kf_id = active_pose.kf_id;
-            active_pose_msg.pose_wc_opt = isoToPoseMsg(active_pose.T_WC_opt);
-            active_pose_msg.pose_wb_opt = isoToPoseMsg(active_pose.T_WB_opt);
-            opt_msg.active_keyframe_poses.push_back(std::move(active_pose_msg));
-        }
-        opt_msg.stats.num_keyframes_in_window = result.stats.num_keyframes_in_window;
-        opt_msg.stats.num_landmarks_alive = result.stats.num_landmarks_alive;
-        opt_msg.stats.num_landmarks_created = result.stats.num_landmarks_created;
-        opt_msg.stats.num_stereo_factors_added = result.stats.num_stereo_factors_added;
-        opt_msg.stats.num_imu_factors_added = result.stats.num_imu_factors_added;
-        opt_msg.stats.num_between_factors_added = result.stats.num_between_factors_added;
-        opt_msg.stats.num_prior_factors_added = result.stats.num_prior_factors_added;
-        opt_msg.stats.had_vo_between_measurement = result.stats.had_vo_between_measurement;
-        opt_msg.stats.used_vo_between_factor = result.stats.used_vo_between_factor;
-        opt_msg.stats.skipped_vo_between_factor = result.stats.skipped_vo_between_factor;
-        opt_msg.stats.vo_between_quality = result.stats.vo_between_quality;
-        opt_msg.stats.vo_between_sigma_scale = result.stats.vo_between_sigma_scale;
-        opt_msg.stats.imu_only_update = result.stats.imu_only_update;
-        opt_msg.stats.update_iterations = result.stats.update_iterations;
-        opt_msg.stats.update_intermediate_steps = result.stats.update_intermediate_steps;
-        opt_msg.stats.update_nonlinear_variables = result.stats.update_nonlinear_variables;
-        opt_msg.stats.update_linear_variables = result.stats.update_linear_variables;
-        opt_msg.stats.final_error = result.stats.final_error;
-        opt_msg.stats.has_error_before = result.stats.has_error_before;
-        opt_msg.stats.error_before = result.stats.error_before;
-        opt_msg.stats.has_error_after = result.stats.has_error_after;
-        opt_msg.stats.error_after = result.stats.error_after;
-        opt_msg.stats.variables_relinearized = result.stats.variables_relinearized;
-        opt_msg.stats.variables_reeliminated = result.stats.variables_reeliminated;
-        opt_msg.stats.factors_recalculated = result.stats.factors_recalculated;
-        opt_msg.stats.cliques = result.stats.cliques;
-        opt_msg.has_velocity = result.has_velocity;
-        opt_msg.velocity_opt.x = result.velocity_opt.x();
-        opt_msg.velocity_opt.y = result.velocity_opt.y();
-        opt_msg.velocity_opt.z = result.velocity_opt.z();
-        opt_msg.accel_bias.x = result.bias_opt.accel.x();
-        opt_msg.accel_bias.y = result.bias_opt.accel.y();
-        opt_msg.accel_bias.z = result.bias_opt.accel.z();
-        opt_msg.gyro_bias.x = result.bias_opt.gyro.x();
-        opt_msg.gyro_bias.y = result.bias_opt.gyro.y();
-        opt_msg.gyro_bias.z = result.bias_opt.gyro.z();
-        opt_msg.has_pose_wb_covariance = result.has_pose_wb_covariance;
-        opt_msg.pose_wb_covariance = result.pose_wb_covariance;
-        opt_msg.has_velocity_covariance = result.has_velocity_covariance;
-        opt_msg.velocity_covariance = result.velocity_covariance;
-        opt_msg.has_bias_covariance = result.has_bias_covariance;
-        opt_msg.bias_covariance = result.bias_covariance;
-        optimization_result_pub_->publish(opt_msg);
+        optimization_result_pub_->publish(
+            makeOptimizationResultMsg(msg, result, node_cfg_.map_frame_id));
     }
 
     Eigen::Isometry3d updateMapOdomTarget_(
@@ -653,6 +603,123 @@ private:
         const auto T_map_odom = updateMapOdomTarget_(msg, result);
         updateLocalizationMapOdom_(T_map_odom);
     }
+
+    void initTf_()
+    {
+        tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+        tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
+        using namespace std::chrono_literals;
+        tf_timer_ = this->create_wall_timer(
+            std::chrono::duration<double>(1.0 / node_cfg_.tf_pub_rate_hz),
+            [this]()
+            { this->publishMapOdomTf_(); });
+    }
+
+    void initPublishers_()
+    {
+        auto bias_qos = rclcpp::QoS(rclcpp::KeepLast(2)).reliable().durability_volatile();
+        bias_pub_ = this->create_publisher<visual_inertial::msg::ImuBias>("imu_bias", bias_qos);
+
+        if (node_cfg_.publish_optimization_result)
+        {
+            optimization_result_pub_ = this->create_publisher<visual_inertial::msg::OptimizationResult>(
+                node_cfg_.optimization_result_topic, bias_qos);
+        }
+
+        if (node_cfg_.publish_optimized_landmarks)
+        {
+            auto lm_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile();
+            lm_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(node_cfg_.landmark_topic, lm_qos);
+        }
+    }
+
+    void initSubscriptions_()
+    {
+        auto kf_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
+        auto info_qos = rclcpp::SensorDataQoS();
+        auto tag_qos = rclcpp::SensorDataQoS();
+
+        left_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
+            node_cfg_.left_info_topic, info_qos,
+            [this](sensor_msgs::msg::CameraInfo::SharedPtr msg)
+            {
+                std::lock_guard<std::mutex> lk(calib_mtx_);
+                left_info_ = *msg;
+                maybeInitRigAndOptimizer_();
+            });
+
+        right_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
+            node_cfg_.right_info_topic, info_qos,
+            [this](sensor_msgs::msg::CameraInfo::SharedPtr msg)
+            {
+                std::lock_guard<std::mutex> lk(calib_mtx_);
+                right_info_ = *msg;
+                maybeInitRigAndOptimizer_();
+            });
+
+        if (node_cfg_.localization_mode && localization_)
+        {
+            tag_sub_ = create_subscription<apriltag_msgs::msg::AprilTagDetectionArray>(
+                localization_->config().tag_topic,
+                tag_qos,
+                [this](apriltag_msgs::msg::AprilTagDetectionArray::SharedPtr msg)
+                {
+                    this->onTagDetections_(std::move(msg));
+                });
+        }
+
+        kf_sub_ = create_subscription<visual_inertial::msg::Keyframe>(
+            node_cfg_.keyframe_topic, kf_qos,
+            [this](visual_inertial::msg::Keyframe::SharedPtr msg)
+            {
+                {
+                    std::lock_guard<std::mutex> lk(q_mtx_);
+                    kf_q_.push_back(*msg);
+                    while (kf_q_.size() > node_cfg_.max_keyframe_queue)
+                        kf_q_.pop_front();
+                }
+                q_cv_.notify_one();
+            });
+    }
+
+    void startWorker_()
+    {
+        stop_.store(false);
+        worker_ = std::thread([this]()
+                              { workerLoop_(); });
+    }
+
+    void logStartup_() const
+    {
+        RCLCPP_INFO(get_logger(),
+                    "Optimization node started. mode=%s KF=%s L_info=%s R_info=%s TF=%s->%s @ %.1f Hz",
+                    node_cfg_.operation_mode.c_str(),
+                    node_cfg_.keyframe_topic.c_str(), node_cfg_.left_info_topic.c_str(), node_cfg_.right_info_topic.c_str(),
+                    node_cfg_.map_frame_id.c_str(), node_cfg_.odom_frame_id.c_str(), node_cfg_.tf_pub_rate_hz);
+
+        if (node_cfg_.publish_optimized_landmarks)
+        {
+            RCLCPP_INFO(get_logger(), "Optimized landmark publishing enabled on '%s'",
+                        node_cfg_.landmark_topic.c_str());
+        }
+        else
+        {
+            RCLCPP_INFO(get_logger(), "Optimized landmark publishing disabled");
+        }
+
+        if (node_cfg_.publish_optimization_result)
+        {
+            RCLCPP_INFO(get_logger(), "Optimization result publishing enabled on '%s'",
+                        node_cfg_.optimization_result_topic.c_str());
+        }
+        else
+        {
+            RCLCPP_INFO(get_logger(), "Optimization result publishing disabled");
+        }
+    }
+
     void maybeInitRigAndOptimizer_()
     {
         if (optimization_->ready())
@@ -803,33 +870,8 @@ private:
             return;
 
         const auto lms = optimization.getLandmarks(node_cfg_.lm_fetch_max);
-
-        sensor_msgs::msg::PointCloud2 msg;
-        msg.header.stamp = this->now();
-        msg.header.frame_id = node_cfg_.map_frame_id;
-        msg.height = 1;
-        msg.width = static_cast<uint32_t>(lms.size());
-        msg.is_dense = false;
-
-        sensor_msgs::PointCloud2Modifier mod(msg);
-        mod.setPointCloud2FieldsByString(1, "xyz");
-        mod.resize(lms.size());
-
-        sensor_msgs::PointCloud2Iterator<float> it_x(msg, "x");
-        sensor_msgs::PointCloud2Iterator<float> it_y(msg, "y");
-        sensor_msgs::PointCloud2Iterator<float> it_z(msg, "z");
-
-        for (const auto &lm : lms)
-        {
-            *it_x = static_cast<float>(lm.p_W.x());
-            *it_y = static_cast<float>(lm.p_W.y());
-            *it_z = static_cast<float>(lm.p_W.z());
-            ++it_x;
-            ++it_y;
-            ++it_z;
-        }
-
-        lm_pub_->publish(msg);
+        lm_pub_->publish(
+            makeLandmarkPointCloudMsg(lms, this->now(), node_cfg_.map_frame_id));
     }
 
     void onTagDetections_(apriltag_msgs::msg::AprilTagDetectionArray::SharedPtr msg)
