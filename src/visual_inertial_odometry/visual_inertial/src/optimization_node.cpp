@@ -643,45 +643,23 @@ private:
 
         left_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
             node_cfg_.left_info_topic, info_qos,
-            [this](sensor_msgs::msg::CameraInfo::SharedPtr msg)
-            {
-                std::lock_guard<std::mutex> lk(calib_mtx_);
-                left_info_ = *msg;
-                maybeInitRigAndOptimizer_();
-            });
+            std::bind(&OptimizationNode::onLeftCameraInfo_, this, std::placeholders::_1));
 
         right_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
             node_cfg_.right_info_topic, info_qos,
-            [this](sensor_msgs::msg::CameraInfo::SharedPtr msg)
-            {
-                std::lock_guard<std::mutex> lk(calib_mtx_);
-                right_info_ = *msg;
-                maybeInitRigAndOptimizer_();
-            });
+            std::bind(&OptimizationNode::onRightCameraInfo_, this, std::placeholders::_1));
 
         if (node_cfg_.localization_mode && localization_)
         {
             tag_sub_ = create_subscription<apriltag_msgs::msg::AprilTagDetectionArray>(
                 localization_->config().tag_topic,
                 tag_qos,
-                [this](apriltag_msgs::msg::AprilTagDetectionArray::SharedPtr msg)
-                {
-                    this->onTagDetections_(std::move(msg));
-                });
+                std::bind(&OptimizationNode::onTagDetections_, this, std::placeholders::_1));
         }
 
         kf_sub_ = create_subscription<visual_inertial::msg::Keyframe>(
             node_cfg_.keyframe_topic, kf_qos,
-            [this](visual_inertial::msg::Keyframe::SharedPtr msg)
-            {
-                {
-                    std::lock_guard<std::mutex> lk(q_mtx_);
-                    kf_q_.push_back(*msg);
-                    while (kf_q_.size() > node_cfg_.max_keyframe_queue)
-                        kf_q_.pop_front();
-                }
-                q_cv_.notify_one();
-            });
+            std::bind(&OptimizationNode::onKeyframe_, this, std::placeholders::_1));
     }
 
     void startWorker_()
@@ -788,6 +766,31 @@ private:
                 node_cfg_.body_frame_id.c_str(), camera_frame.c_str(), ex.what());
             return false;
         }
+    }
+
+    void onLeftCameraInfo_(sensor_msgs::msg::CameraInfo::SharedPtr msg)
+    {
+        std::lock_guard<std::mutex> lk(calib_mtx_);
+        left_info_ = *msg;
+        maybeInitRigAndOptimizer_();
+    }
+
+    void onRightCameraInfo_(sensor_msgs::msg::CameraInfo::SharedPtr msg)
+    {
+        std::lock_guard<std::mutex> lk(calib_mtx_);
+        right_info_ = *msg;
+        maybeInitRigAndOptimizer_();
+    }
+
+    void onKeyframe_(visual_inertial::msg::Keyframe::SharedPtr msg)
+    {
+        {
+            std::lock_guard<std::mutex> lk(q_mtx_);
+            kf_q_.push_back(*msg);
+            while (kf_q_.size() > node_cfg_.max_keyframe_queue)
+                kf_q_.pop_front();
+        }
+        q_cv_.notify_one();
     }
 
     void workerLoop_()
@@ -903,53 +906,43 @@ private:
     }
 
 private:
+    // Configuration and library-facing runtime components
     std::unique_ptr<visual_inertial::OptimizationNodeParamHandler> param_handler_;
     visual_inertial::OptimizationNodeConfig node_cfg_;
-    bool localization_use_tag_priors_{false};
+    std::unique_ptr<OptimizationModule> optimization_;
     std::unique_ptr<visual_inertial_localization::LocalizationModule> localization_;
+    bool localization_use_tag_priors_{false};
 
+    // TF interfaces and latest published map->odom state
     rclcpp::TimerBase::SharedPtr tf_timer_;
-
-    // Subscriptions
-    rclcpp::Subscription<visual_inertial::msg::Keyframe>::SharedPtr kf_sub_;
-    rclcpp::Subscription<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_sub_;
-
-    // TF
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
     bool t_bc_resolved_from_tf_{false};
-
-    // Latest map->odom cached transform
     std::mutex tf_mtx_;
+    Eigen::Isometry3d T_map_odom_target_ = Eigen::Isometry3d::Identity();
+    bool have_target_ = false;
 
-    // Calibration state
+    // Calibration inputs used to bring the backend online
     std::mutex calib_mtx_;
     std::optional<sensor_msgs::msg::CameraInfo> left_info_;
     std::optional<sensor_msgs::msg::CameraInfo> right_info_;
 
-    // Backend
-    std::unique_ptr<OptimizationModule> optimization_;
+    // ROS interfaces
+    rclcpp::Subscription<visual_inertial::msg::Keyframe>::SharedPtr kf_sub_;
+    rclcpp::Subscription<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_sub_;
+    rclcpp::Publisher<visual_inertial::msg::ImuBias>::SharedPtr bias_pub_;
+    rclcpp::Publisher<visual_inertial::msg::OptimizationResult>::SharedPtr optimization_result_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lm_pub_;
 
-    // Queue / threading
+    // Worker-side keyframe queue and thread
     std::mutex q_mtx_;
     std::condition_variable q_cv_;
     std::deque<visual_inertial::msg::Keyframe> kf_q_;
-
     std::thread worker_;
     std::atomic<bool> stop_{false};
-
-    // publisher for imu bias
-    rclcpp::Publisher<visual_inertial::msg::ImuBias>::SharedPtr bias_pub_;
-    rclcpp::Publisher<visual_inertial::msg::OptimizationResult>::SharedPtr optimization_result_pub_;
-
-    // latest map->odom transform from optimization
-    Eigen::Isometry3d T_map_odom_target_ = Eigen::Isometry3d::Identity();
-    bool have_target_ = false;
-
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lm_pub_;
 };
 
 int main(int argc, char **argv)
