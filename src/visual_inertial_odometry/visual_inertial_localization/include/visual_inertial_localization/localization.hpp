@@ -1,15 +1,33 @@
 #pragma once
 
-#include <visual_inertial_localization/localization_controller.hpp>
-#include <visual_inertial_localization/localization_engine.hpp>
+#include <apriltag_msgs/msg/april_tag_detection_array.hpp>
+#include <rclcpp/time.hpp>
+#include <tf2_ros/buffer.h>
+#include <visual_inertial_localization/localization_data.hpp>
+#include <visual_inertial_localization/localization_types.hpp>
+
+#include <Eigen/Geometry>
+
+#include <memory>
+#include <optional>
+#include <string>
 
 namespace visual_inertial_localization
 {
+
+class LocalizationController;
+class LocalizationEngine;
 
 class LocalizationModule
 {
 public:
     explicit LocalizationModule(LocalizationConfig config);
+    ~LocalizationModule();
+
+    LocalizationModule(const LocalizationModule &) = delete;
+    LocalizationModule &operator=(const LocalizationModule &) = delete;
+    LocalizationModule(LocalizationModule &&) noexcept;
+    LocalizationModule &operator=(LocalizationModule &&) noexcept;
 
     LocalizationLoadReport loadTagMap();
     TagIngestReport ingestDetections(
@@ -28,8 +46,8 @@ public:
     const LocalizationConfig &config() const noexcept;
 
 private:
-    LocalizationEngine engine_;
-    LocalizationController controller_;
+    std::unique_ptr<LocalizationEngine> engine_;
+    std::unique_ptr<LocalizationController> controller_;
 };
 
 } // namespace visual_inertial_localization
