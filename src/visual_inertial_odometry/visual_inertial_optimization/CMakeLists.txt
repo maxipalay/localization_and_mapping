@@ -30,6 +30,10 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   ${_gtsam_eigen}
 )
 
+target_include_directories(${PROJECT_NAME} PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/internal
+)
+
 target_link_libraries(${PROJECT_NAME}
   ${OpenCV_LIBS}
   gtsam
