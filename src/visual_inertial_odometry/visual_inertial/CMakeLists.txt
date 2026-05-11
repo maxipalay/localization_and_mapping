@@ -27,6 +27,7 @@ find_package(Boost REQUIRED COMPONENTS serialization)
 find_package(eigen3_cmake_module REQUIRED)
 
 add_executable(tracking_node src/tracking_node.cpp)
+add_executable(localization_node src/localization_node.cpp)
 add_executable(optimization_node
   src/optimization_node.cpp
   src/optimization_node_params.cpp)
@@ -43,7 +44,10 @@ ament_target_dependencies(tracks_viz_node
   rclcpp sensor_msgs cv_bridge image_transport OpenCV)
 
 ament_target_dependencies(optimization_node
-  apriltag_msgs rclcpp sensor_msgs visual_inertial_common visual_inertial_optimization tf2_ros)
+  rclcpp sensor_msgs visual_inertial_common visual_inertial_optimization tf2_ros)
+
+ament_target_dependencies(localization_node
+  apriltag_msgs rclcpp sensor_msgs tf2_ros)
 
 ament_target_dependencies(path_viz_node
   rclcpp nav_msgs geometry_msgs tf2 tf2_ros)
@@ -55,12 +59,15 @@ target_link_libraries(tracking_node
 
 target_link_libraries(optimization_node
   visual_inertial_optimization::visual_inertial_optimization
-  visual_inertial_localization::visual_inertial_localization
   visual_inertial_common::visual_inertial_common
   TBB::tbb
 )
 
-install(TARGETS tracking_node optimization_node path_viz_node tracks_viz_node
+target_link_libraries(localization_node
+  visual_inertial_localization::visual_inertial_localization
+)
+
+install(TARGETS tracking_node localization_node optimization_node path_viz_node tracks_viz_node
   RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -71,12 +78,16 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/OptimizedKeyframePose.msg"
   "msg/OptimizationStats.msg"
   "msg/OptimizationResult.msg"
+  "msg/LocalizationPosePrior.msg"
+  "msg/LocalizationCommand.msg"
+  "msg/LocalizationFeedback.msg"
   "msg/Tracks.msg"
   DEPENDENCIES builtin_interfaces sensor_msgs geometry_msgs std_msgs
 )
 
 rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_typesupport_cpp")
 target_link_libraries(tracking_node "${cpp_typesupport_target}")
+target_link_libraries(localization_node "${cpp_typesupport_target}")
 target_link_libraries(tracks_viz_node "${cpp_typesupport_target}")
 target_link_libraries(optimization_node "${cpp_typesupport_target}")
 

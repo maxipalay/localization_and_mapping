@@ -1,0 +1,393 @@
+#include <rclcpp/rclcpp.hpp>
+
+#include <apriltag_msgs/msg/april_tag_detection_array.hpp>
+#include <geometry_msgs/msg/pose.hpp>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+
+#include <visual_inertial/msg/keyframe.hpp>
+#include <visual_inertial/msg/localization_command.hpp>
+#include <visual_inertial/msg/localization_feedback.hpp>
+#include <visual_inertial/msg/localization_pose_prior.hpp>
+
+#include <visual_inertial_localization/localization.hpp>
+
+#include <Eigen/Geometry>
+
+#include <memory>
+#include <optional>
+#include <string>
+#include <functional>
+#include <vector>
+
+namespace
+{
+
+struct LocalizationNodeRuntimeConfig
+{
+    std::string keyframe_topic{"keyframes"};
+    std::string body_frame_id{"body"};
+    std::string odom_frame_id{"odom"};
+    std::string localization_command_topic{"localization_command"};
+    std::string localization_feedback_topic{"localization_feedback"};
+};
+
+Eigen::Isometry3d poseMsgToIso(const geometry_msgs::msg::Pose &pose)
+{
+    Eigen::Quaterniond q(
+        pose.orientation.w,
+        pose.orientation.x,
+        pose.orientation.y,
+        pose.orientation.z);
+    q.normalize();
+
+    Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+    T.linear() = q.toRotationMatrix();
+    T.translation() = Eigen::Vector3d(
+        pose.position.x,
+        pose.position.y,
+        pose.position.z);
+    return T;
+}
+
+geometry_msgs::msg::Pose isoToPoseMsg(const Eigen::Isometry3d &T)
+{
+    geometry_msgs::msg::Pose pose;
+    pose.position.x = T.translation().x();
+    pose.position.y = T.translation().y();
+    pose.position.z = T.translation().z();
+
+    Eigen::Quaterniond q(T.linear());
+    q.normalize();
+    pose.orientation.w = q.w();
+    pose.orientation.x = q.x();
+    pose.orientation.y = q.y();
+    pose.orientation.z = q.z();
+    return pose;
+}
+
+LocalizationNodeRuntimeConfig declareRuntimeConfig(rclcpp::Node &node)
+{
+    LocalizationNodeRuntimeConfig cfg;
+    cfg.keyframe_topic =
+        node.declare_parameter<std::string>("keyframe_topic", cfg.keyframe_topic);
+    cfg.body_frame_id =
+        node.declare_parameter<std::string>("body_frame_id", cfg.body_frame_id);
+    cfg.odom_frame_id =
+        node.declare_parameter<std::string>("odom_frame_id", cfg.odom_frame_id);
+    cfg.localization_command_topic = node.declare_parameter<std::string>(
+        "localization_command_topic", cfg.localization_command_topic);
+    cfg.localization_feedback_topic = node.declare_parameter<std::string>(
+        "localization_feedback_topic", cfg.localization_feedback_topic);
+    return cfg;
+}
+
+visual_inertial_localization::LocalizationConfig declareLocalizationConfig(rclcpp::Node &node)
+{
+    auto cfg = visual_inertial_localization::LocalizationConfig{};
+
+    cfg.tag_map_path =
+        node.declare_parameter<std::string>("localization_tag_map_path", "");
+    cfg.tag_topic =
+        node.declare_parameter<std::string>("tag_topic", cfg.tag_topic);
+    cfg.tag_tf_lookup_timeout_ms =
+        node.declare_parameter<double>("tag_tf_lookup_timeout_ms", cfg.tag_tf_lookup_timeout_ms);
+    cfg.tag_max_age_s =
+        node.declare_parameter<double>("localization_tag_max_age_s", cfg.tag_max_age_s);
+    cfg.tag_buffer_age_s =
+        node.declare_parameter<double>("tag_buffer_age_s", cfg.tag_buffer_age_s);
+    cfg.max_tag_hamming =
+        node.declare_parameter<int>("max_tag_hamming", cfg.max_tag_hamming);
+    cfg.min_tag_decision_margin =
+        node.declare_parameter<double>("min_tag_decision_margin", cfg.min_tag_decision_margin);
+    cfg.max_tag_range_m =
+        node.declare_parameter<double>("max_tag_range_m", cfg.max_tag_range_m);
+    cfg.max_tag_oblique_angle_deg =
+        node.declare_parameter<double>("max_tag_oblique_angle_deg", cfg.max_tag_oblique_angle_deg);
+    cfg.pose_prior_rot_sigma_rad =
+        node.declare_parameter<double>("localization_pose_prior_rot_sigma_rad", cfg.pose_prior_rot_sigma_rad);
+    cfg.pose_prior_trans_sigma_m =
+        node.declare_parameter<double>("localization_pose_prior_trans_sigma_m", cfg.pose_prior_trans_sigma_m);
+    cfg.pose_prior_huber_k =
+        node.declare_parameter<double>("localization_pose_prior_huber_k", cfg.pose_prior_huber_k);
+    cfg.cluster_translation_m =
+        node.declare_parameter<double>("localization_cluster_translation_m", cfg.cluster_translation_m);
+    cfg.cluster_rotation_deg =
+        node.declare_parameter<double>("localization_cluster_rotation_deg", cfg.cluster_rotation_deg);
+    cfg.stable_hypothesis_age_s =
+        node.declare_parameter<double>("localization_stable_hypothesis_age_s", cfg.stable_hypothesis_age_s);
+    cfg.stable_min_frames = static_cast<size_t>(
+        node.declare_parameter<int>("localization_stable_min_frames", static_cast<int>(cfg.stable_min_frames)));
+    cfg.relocalization_min_history_frames = static_cast<size_t>(
+        node.declare_parameter<int>(
+            "localization_relocalization_min_history_frames",
+            static_cast<int>(cfg.relocalization_min_history_frames)));
+    cfg.stable_translation_m =
+        node.declare_parameter<double>("localization_stable_translation_m", cfg.stable_translation_m);
+    cfg.stable_rotation_deg =
+        node.declare_parameter<double>("localization_stable_rotation_deg", cfg.stable_rotation_deg);
+    cfg.relocalize_translation_m =
+        node.declare_parameter<double>("localization_relocalize_translation_m", cfg.relocalize_translation_m);
+    cfg.relocalize_rotation_deg =
+        node.declare_parameter<double>("localization_relocalize_rotation_deg", cfg.relocalize_rotation_deg);
+    cfg.tracking_deadband_translation_m =
+        node.declare_parameter<double>(
+            "localization_tracking_deadband_translation_m",
+            cfg.tracking_deadband_translation_m);
+    cfg.tracking_deadband_rotation_deg =
+        node.declare_parameter<double>(
+            "localization_tracking_deadband_rotation_deg",
+            cfg.tracking_deadband_rotation_deg);
+
+    const auto tag_frame_ids = node.declare_parameter<std::vector<int64_t>>(
+        "tag_frame_ids", std::vector<int64_t>{});
+    const auto tag_frame_names = node.declare_parameter<std::vector<std::string>>(
+        "tag_frame_names", std::vector<std::string>{});
+
+    if (tag_frame_ids.size() != tag_frame_names.size())
+    {
+        RCLCPP_WARN(
+            node.get_logger(),
+            "tag_frame_ids/tag_frame_names size mismatch (%zu vs %zu); ignoring overrides",
+            tag_frame_ids.size(),
+            tag_frame_names.size());
+        return cfg;
+    }
+
+    for (size_t i = 0; i < tag_frame_ids.size(); ++i)
+    {
+        cfg.tag_frame_overrides.emplace(
+            static_cast<int>(tag_frame_ids[i]),
+            tag_frame_names[i]);
+    }
+
+    return cfg;
+}
+
+visual_inertial::msg::LocalizationPosePrior makeLocalizationPosePriorMsg(
+    const visual_inertial_localization::LocalizationPosePrior &prior)
+{
+    visual_inertial::msg::LocalizationPosePrior msg;
+    msg.pose_wb = isoToPoseMsg(prior.T_WB);
+    msg.rot_sigma_rad = prior.rot_sigma_rad;
+    msg.trans_sigma_m = prior.trans_sigma_m;
+    msg.huber_k = prior.huber_k;
+    return msg;
+}
+
+visual_inertial::msg::LocalizationCommand makeLocalizationCommandMsg(
+    const visual_inertial::msg::Keyframe &keyframe,
+    const visual_inertial_localization::LocalizationDecision &decision)
+{
+    visual_inertial::msg::LocalizationCommand msg;
+    msg.header = keyframe.header;
+    msg.kf_id = keyframe.kf_id;
+    msg.state =
+        (decision.state == visual_inertial_localization::LocalizationState::Localized)
+            ? visual_inertial::msg::LocalizationCommand::STATE_LOCALIZED
+            : visual_inertial::msg::LocalizationCommand::STATE_ODOM_ONLY;
+
+    switch (decision.action)
+    {
+    case visual_inertial_localization::LocalizationAction::Bootstrap:
+        msg.action = visual_inertial::msg::LocalizationCommand::ACTION_BOOTSTRAP;
+        break;
+    case visual_inertial_localization::LocalizationAction::Relocalize:
+        msg.action = visual_inertial::msg::LocalizationCommand::ACTION_RELOCALIZE;
+        break;
+    case visual_inertial_localization::LocalizationAction::None:
+    default:
+        msg.action = visual_inertial::msg::LocalizationCommand::ACTION_NONE;
+        break;
+    }
+
+    msg.waiting_for_bootstrap = decision.waiting_for_bootstrap;
+    msg.absolute_pose_priors.reserve(decision.optimizer_inputs.absolute_pose_priors.size());
+    for (const auto &prior : decision.optimizer_inputs.absolute_pose_priors)
+    {
+        msg.absolute_pose_priors.push_back(makeLocalizationPosePriorMsg(prior));
+    }
+
+    msg.has_init_override = decision.optimizer_inputs.T_WB_init_override.has_value();
+    if (msg.has_init_override)
+    {
+        msg.pose_wb_init_override =
+            isoToPoseMsg(*decision.optimizer_inputs.T_WB_init_override);
+    }
+
+    msg.has_anchor_override = decision.optimizer_inputs.T_WB_anchor_override.has_value();
+    if (msg.has_anchor_override)
+    {
+        msg.pose_wb_anchor_override =
+            isoToPoseMsg(*decision.optimizer_inputs.T_WB_anchor_override);
+    }
+
+    msg.has_bootstrap_info = decision.bootstrap.has_value();
+    if (msg.has_bootstrap_info)
+    {
+        msg.bootstrap_support_count = static_cast<uint32_t>(decision.bootstrap->support_count);
+        msg.bootstrap_score = decision.bootstrap->score;
+    }
+
+    msg.has_relocalization_info = decision.relocalization.has_value();
+    if (msg.has_relocalization_info)
+    {
+        msg.relocalization_frame_support =
+            static_cast<uint32_t>(decision.relocalization->frame_support);
+        msg.relocalization_support_count =
+            static_cast<uint32_t>(decision.relocalization->support_count);
+        msg.relocalization_translation_error_m =
+            decision.relocalization->translation_error_m;
+        msg.relocalization_rotation_error_rad =
+            decision.relocalization->rotation_error_rad;
+    }
+
+    return msg;
+}
+
+} // namespace
+
+class LocalizationNode final : public rclcpp::Node
+{
+public:
+    LocalizationNode()
+        : rclcpp::Node("visual_inertial_localization")
+    {
+        runtime_cfg_ = declareRuntimeConfig(*this);
+        auto loc_cfg = declareLocalizationConfig(*this);
+        localization_ = std::make_unique<visual_inertial_localization::LocalizationModule>(
+            std::move(loc_cfg));
+
+        const auto report = localization_->loadTagMap();
+        if (localization_->config().tag_map_path.empty())
+        {
+            RCLCPP_INFO(
+                get_logger(),
+                "No tag map path configured; localization node will publish odometry-only commands");
+        }
+        else if (report.ok)
+        {
+            RCLCPP_INFO(
+                get_logger(),
+                "Localization tag map loaded from %s with %zu tags and %zu frame overrides",
+                localization_->config().tag_map_path.c_str(),
+                report.mapped_tag_count,
+                report.frame_override_count);
+        }
+        else
+        {
+            RCLCPP_WARN(
+                get_logger(),
+                "Localization tag map could not be loaded from %s: %s",
+                localization_->config().tag_map_path.c_str(),
+                report.message.c_str());
+        }
+
+        tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
+        auto command_qos = rclcpp::QoS(rclcpp::KeepLast(20)).reliable().durability_volatile();
+        command_pub_ = create_publisher<visual_inertial::msg::LocalizationCommand>(
+            runtime_cfg_.localization_command_topic, command_qos);
+
+        auto keyframe_qos = rclcpp::QoS(rclcpp::KeepLast(20)).reliable().durability_volatile();
+        keyframe_sub_ = create_subscription<visual_inertial::msg::Keyframe>(
+            runtime_cfg_.keyframe_topic,
+            keyframe_qos,
+            std::bind(&LocalizationNode::onKeyframe_, this, std::placeholders::_1));
+
+        auto feedback_qos = rclcpp::QoS(rclcpp::KeepLast(20)).reliable().durability_volatile();
+        feedback_sub_ = create_subscription<visual_inertial::msg::LocalizationFeedback>(
+            runtime_cfg_.localization_feedback_topic,
+            feedback_qos,
+            std::bind(&LocalizationNode::onLocalizationFeedback_, this, std::placeholders::_1));
+
+        auto tag_qos = rclcpp::SensorDataQoS();
+        tag_sub_ = create_subscription<apriltag_msgs::msg::AprilTagDetectionArray>(
+            localization_->config().tag_topic,
+            tag_qos,
+            std::bind(&LocalizationNode::onTagDetections_, this, std::placeholders::_1));
+
+        RCLCPP_INFO(
+            get_logger(),
+            "Localization node started. keyframes=%s tags=%s command=%s feedback=%s",
+            runtime_cfg_.keyframe_topic.c_str(),
+            localization_->config().tag_topic.c_str(),
+            runtime_cfg_.localization_command_topic.c_str(),
+            runtime_cfg_.localization_feedback_topic.c_str());
+    }
+
+private:
+    void onKeyframe_(visual_inertial::msg::Keyframe::SharedPtr msg)
+    {
+        if (!msg)
+        {
+            return;
+        }
+
+        const auto decision = localization_->processKeyframe(
+            rclcpp::Time(msg->header.stamp).nanoseconds(),
+            poseMsgToIso(msg->pose_odom_body));
+        command_pub_->publish(makeLocalizationCommandMsg(*msg, decision));
+    }
+
+    void onLocalizationFeedback_(visual_inertial::msg::LocalizationFeedback::SharedPtr msg)
+    {
+        if (!msg)
+        {
+            return;
+        }
+
+        localization_->updateMapOdomEstimate(poseMsgToIso(msg->pose_map_odom));
+    }
+
+    void onTagDetections_(apriltag_msgs::msg::AprilTagDetectionArray::SharedPtr msg)
+    {
+        if (!msg || !tf_buffer_)
+        {
+            return;
+        }
+
+        const auto report = localization_->ingestDetections(
+            *msg,
+            runtime_cfg_.body_frame_id,
+            runtime_cfg_.odom_frame_id,
+            *tf_buffer_);
+        const auto stable_correction =
+            localization_->estimateStableCorrection(rclcpp::Time(msg->header.stamp));
+        RCLCPP_INFO_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Localization tag ingest: detections=%zu accepted=%zu skipped_unmapped=%zu "
+            "skipped_hamming=%zu skipped_margin=%zu skipped_tf=%zu skipped_range=%zu skipped_oblique=%zu buffered=%zu stable_frames=%zu stable_support=%zu",
+            report.total_detections,
+            report.accepted,
+            report.skipped_unmapped,
+            report.skipped_hamming,
+            report.skipped_margin,
+            report.skipped_tf_lookup,
+            report.skipped_range,
+            report.skipped_oblique,
+            report.buffered,
+            stable_correction.has_value() ? stable_correction->frame_support : 0,
+            stable_correction.has_value() ? stable_correction->support_count : 0);
+    }
+
+private:
+    LocalizationNodeRuntimeConfig runtime_cfg_;
+    std::unique_ptr<visual_inertial_localization::LocalizationModule> localization_;
+    std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
+    rclcpp::Publisher<visual_inertial::msg::LocalizationCommand>::SharedPtr command_pub_;
+    rclcpp::Subscription<visual_inertial::msg::Keyframe>::SharedPtr keyframe_sub_;
+    rclcpp::Subscription<visual_inertial::msg::LocalizationFeedback>::SharedPtr feedback_sub_;
+    rclcpp::Subscription<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_sub_;
+};
+
+int main(int argc, char **argv)
+{
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<LocalizationNode>());
+    rclcpp::shutdown();
+    return 0;
+}

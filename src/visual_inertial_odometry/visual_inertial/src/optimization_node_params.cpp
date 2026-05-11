@@ -11,10 +11,6 @@ OptimizationNodeParamHandler::OptimizationNodeParamHandler(rclcpp::Node &node)
     declareNodeParams_();
     declareOptimizerParams_();
     validateOperationMode_();
-    if (params_.node.localization_mode)
-    {
-        declareLocalizationParams_();
-    }
 }
 
 const OptimizationNodeParams &OptimizationNodeParamHandler::params() const noexcept
@@ -60,6 +56,12 @@ void OptimizationNodeParamHandler::declareNodeParams_()
         node_.declare_parameter<std::string>("landmark_topic", cfg.landmark_topic);
     cfg.lm_fetch_max = static_cast<size_t>(
         node_.declare_parameter<int>("lm_fetch_max", static_cast<int>(cfg.lm_fetch_max)));
+    cfg.localization_command_topic =
+        node_.declare_parameter<std::string>("localization_command_topic", cfg.localization_command_topic);
+    cfg.localization_feedback_topic =
+        node_.declare_parameter<std::string>("localization_feedback_topic", cfg.localization_feedback_topic);
+    cfg.localization_command_wait_ms =
+        node_.declare_parameter<double>("localization_command_wait_ms", cfg.localization_command_wait_ms);
 }
 
 void OptimizationNodeParamHandler::declareOptimizerParams_()
@@ -120,67 +122,6 @@ void OptimizationNodeParamHandler::declareOptimizerParams_()
     parseBodyCameraExtrinsics_();
 }
 
-void OptimizationNodeParamHandler::declareLocalizationParams_()
-{
-    auto localization = visual_inertial_localization::LocalizationConfig{};
-
-    localization.tag_map_path =
-        node_.declare_parameter<std::string>("localization_tag_map_path", "");
-    localization.tag_topic =
-        node_.declare_parameter<std::string>("tag_topic", localization.tag_topic);
-    localization.tag_tf_lookup_timeout_ms =
-        node_.declare_parameter<double>("tag_tf_lookup_timeout_ms", localization.tag_tf_lookup_timeout_ms);
-    localization.tag_max_age_s =
-        node_.declare_parameter<double>("localization_tag_max_age_s", localization.tag_max_age_s);
-    localization.tag_buffer_age_s =
-        node_.declare_parameter<double>("tag_buffer_age_s", localization.tag_buffer_age_s);
-    localization.max_tag_hamming =
-        node_.declare_parameter<int>("max_tag_hamming", localization.max_tag_hamming);
-    localization.min_tag_decision_margin =
-        node_.declare_parameter<double>("min_tag_decision_margin", localization.min_tag_decision_margin);
-    localization.max_tag_range_m =
-        node_.declare_parameter<double>("max_tag_range_m", localization.max_tag_range_m);
-    localization.max_tag_oblique_angle_deg =
-        node_.declare_parameter<double>("max_tag_oblique_angle_deg", localization.max_tag_oblique_angle_deg);
-    localization.pose_prior_rot_sigma_rad =
-        node_.declare_parameter<double>("localization_pose_prior_rot_sigma_rad", localization.pose_prior_rot_sigma_rad);
-    localization.pose_prior_trans_sigma_m =
-        node_.declare_parameter<double>("localization_pose_prior_trans_sigma_m", localization.pose_prior_trans_sigma_m);
-    localization.pose_prior_huber_k =
-        node_.declare_parameter<double>("localization_pose_prior_huber_k", localization.pose_prior_huber_k);
-    localization.cluster_translation_m =
-        node_.declare_parameter<double>("localization_cluster_translation_m", localization.cluster_translation_m);
-    localization.cluster_rotation_deg =
-        node_.declare_parameter<double>("localization_cluster_rotation_deg", localization.cluster_rotation_deg);
-    localization.stable_hypothesis_age_s =
-        node_.declare_parameter<double>("localization_stable_hypothesis_age_s", localization.stable_hypothesis_age_s);
-    localization.stable_min_frames = static_cast<size_t>(
-        node_.declare_parameter<int>("localization_stable_min_frames", static_cast<int>(localization.stable_min_frames)));
-    localization.relocalization_min_history_frames = static_cast<size_t>(
-        node_.declare_parameter<int>(
-            "localization_relocalization_min_history_frames",
-            static_cast<int>(localization.relocalization_min_history_frames)));
-    localization.stable_translation_m =
-        node_.declare_parameter<double>("localization_stable_translation_m", localization.stable_translation_m);
-    localization.stable_rotation_deg =
-        node_.declare_parameter<double>("localization_stable_rotation_deg", localization.stable_rotation_deg);
-    localization.relocalize_translation_m =
-        node_.declare_parameter<double>("localization_relocalize_translation_m", localization.relocalize_translation_m);
-    localization.relocalize_rotation_deg =
-        node_.declare_parameter<double>("localization_relocalize_rotation_deg", localization.relocalize_rotation_deg);
-    localization.tracking_deadband_translation_m =
-        node_.declare_parameter<double>(
-            "localization_tracking_deadband_translation_m",
-            localization.tracking_deadband_translation_m);
-    localization.tracking_deadband_rotation_deg =
-        node_.declare_parameter<double>(
-            "localization_tracking_deadband_rotation_deg",
-            localization.tracking_deadband_rotation_deg);
-
-    params_.localization = std::move(localization);
-    parseTagFrameOverrides_();
-}
-
 void OptimizationNodeParamHandler::parseBodyCameraExtrinsics_()
 {
     auto &cfg = params_.optimizer;
@@ -216,36 +157,6 @@ void OptimizationNodeParamHandler::parseBodyCameraExtrinsics_()
     T.linear() = q.toRotationMatrix();
     T.translation() = Eigen::Vector3d(t_bc[0], t_bc[1], t_bc[2]);
     cfg.T_BC = T;
-}
-
-void OptimizationNodeParamHandler::parseTagFrameOverrides_()
-{
-    if (!params_.localization.has_value())
-    {
-        return;
-    }
-
-    const auto tag_frame_ids = node_.declare_parameter<std::vector<int64_t>>(
-        "tag_frame_ids", std::vector<int64_t>{});
-    const auto tag_frame_names = node_.declare_parameter<std::vector<std::string>>(
-        "tag_frame_names", std::vector<std::string>{});
-
-    if (tag_frame_ids.size() != tag_frame_names.size())
-    {
-        RCLCPP_WARN(
-            node_.get_logger(),
-            "tag_frame_ids/tag_frame_names size mismatch (%zu vs %zu); ignoring overrides",
-            tag_frame_ids.size(),
-            tag_frame_names.size());
-        return;
-    }
-
-    for (size_t i = 0; i < tag_frame_ids.size(); ++i)
-    {
-        params_.localization->tag_frame_overrides.emplace(
-            static_cast<int>(tag_frame_ids[i]),
-            tag_frame_names[i]);
-    }
 }
 
 void OptimizationNodeParamHandler::validateOperationMode_()

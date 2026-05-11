@@ -1,0 +1,31 @@
+std_msgs/Header header
+uint64 kf_id
+
+uint8 STATE_ODOM_ONLY=0
+uint8 STATE_LOCALIZED=1
+
+uint8 ACTION_NONE=0
+uint8 ACTION_BOOTSTRAP=1
+uint8 ACTION_RELOCALIZE=2
+
+uint8 state
+uint8 action
+bool waiting_for_bootstrap
+
+visual_inertial/LocalizationPosePrior[] absolute_pose_priors
+
+bool has_init_override
+geometry_msgs/Pose pose_wb_init_override
+
+bool has_anchor_override
+geometry_msgs/Pose pose_wb_anchor_override
+
+bool has_bootstrap_info
+uint32 bootstrap_support_count
+float64 bootstrap_score
+
+bool has_relocalization_info
+uint32 relocalization_frame_support
+uint32 relocalization_support_count
+float64 relocalization_translation_error_m
+float64 relocalization_rotation_error_rad

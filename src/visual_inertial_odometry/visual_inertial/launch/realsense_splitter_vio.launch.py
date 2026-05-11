@@ -5,7 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -64,6 +64,15 @@ def generate_launch_description():
         ],
     )
 
+    localization_node = Node(
+        package="visual_inertial",
+        executable="localization_node",
+        name="visual_inertial_localization",
+        output="screen",
+        parameters=[params_file],
+        condition=IfCondition(PythonExpression(["'", operation_mode, "' == 'localization'"])),
+    )
+
     tracks_viz_node = Node(
         package="visual_inertial",
         executable="tracks_viz_node",
@@ -84,7 +93,7 @@ def generate_launch_description():
 
     launch_vio_nodes = TimerAction(
         period=startup_delay,
-        actions=[tracking_node, tracks_viz_node, path_viz_node, optimization_node],
+        actions=[tracking_node, tracks_viz_node, path_viz_node, localization_node, optimization_node],
     )
 
     return LaunchDescription(

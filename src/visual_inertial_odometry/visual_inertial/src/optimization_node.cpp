@@ -1,18 +1,18 @@
 #include <rclcpp/rclcpp.hpp>
 
-#include <apriltag_msgs/msg/april_tag_detection_array.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
+#include <visual_inertial/msg/localization_command.hpp>
+#include <visual_inertial/msg/localization_feedback.hpp>
 #include <visual_inertial/msg/keyframe.hpp>
 #include <visual_inertial/msg/optimization_result.hpp>
 #include <visual_inertial/optimization_node_params.hpp>
 
 #include <visual_inertial_common/types.hpp>
-#include <visual_inertial_localization/localization.hpp>
 #include <visual_inertial_optimization/optimization.hpp>
 #include <visual_inertial_optimization/types.hpp>
 
@@ -34,6 +34,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <chrono>
+#include <unordered_map>
 #include <vector>
 
 #include <visual_inertial/msg/imu_bias.hpp>
@@ -108,13 +109,27 @@ namespace
     }
 
     static AbsolutePosePrior toAbsolutePosePrior(
-        const visual_inertial_localization::LocalizationPosePrior &prior)
+        const visual_inertial::msg::LocalizationPosePrior &prior)
     {
         AbsolutePosePrior out;
-        out.T_WB = prior.T_WB;
+        out.T_WB = poseMsgToIso(prior.pose_wb);
         out.rot_sigma_rad = prior.rot_sigma_rad;
         out.trans_sigma_m = prior.trans_sigma_m;
         out.huber_k = prior.huber_k;
+        return out;
+    }
+
+    static visual_inertial::msg::LocalizationFeedback makeLocalizationFeedbackMsg(
+        const visual_inertial::msg::Keyframe &msg,
+        const OptimizationResult &result)
+    {
+        visual_inertial::msg::LocalizationFeedback out;
+        out.header = msg.header;
+        out.kf_id = result.kf_id;
+
+        const Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_odom_body);
+        const Eigen::Isometry3d T_map_B = result.T_WB_opt;
+        out.pose_map_odom = isoToPoseMsg(T_map_B * T_odom_B.inverse());
         return out;
     }
 
@@ -343,46 +358,6 @@ public:
         node_cfg_ = params.node;
         optimization_ = std::make_unique<OptimizationModule>(params.optimizer);
 
-        if (node_cfg_.localization_mode)
-        {
-            if (!params.localization.has_value())
-            {
-                throw std::runtime_error(
-                    "optimization node missing localization config in localization mode");
-            }
-
-            localization_ = std::make_unique<visual_inertial_localization::LocalizationModule>(
-                *params.localization);
-            const auto report = localization_->loadTagMap();
-            if (localization_->config().tag_map_path.empty())
-            {
-                RCLCPP_INFO(
-                    get_logger(),
-                    "No tag priors were provided; running in pure odometry mode");
-            }
-            else if (report.ok)
-            {
-                localization_use_tag_priors_ = true;
-                RCLCPP_INFO(
-                    get_logger(),
-                    "Localization tag map loaded from %s with %zu tags and %zu frame overrides",
-                    localization_->config().tag_map_path.c_str(),
-                    report.mapped_tag_count,
-                    report.frame_override_count);
-            }
-            else
-            {
-                RCLCPP_WARN(
-                    get_logger(),
-                    "Localization tag map could not be loaded from %s: %s",
-                    localization_->config().tag_map_path.c_str(),
-                    report.message.c_str());
-                RCLCPP_INFO(
-                    get_logger(),
-                    "No tag priors were provided; running in pure odometry mode");
-            }
-        }
-
         initTf_();
         initPublishers_();
         initSubscriptions_();
@@ -406,7 +381,7 @@ private:
         std::vector<AbsolutePosePrior> absolute_pose_priors;
         std::optional<Eigen::Isometry3d> T_WB_init_override;
         std::optional<Eigen::Isometry3d> T_WB_anchor_override;
-        std::optional<visual_inertial_localization::LocalizationDecision> localization_decision;
+        std::optional<visual_inertial::msg::LocalizationCommand> localization_command;
     };
 
     // Keyframe update preparation and localization decisions
@@ -435,8 +410,40 @@ private:
             msg.pim_bytes.size());
     }
 
+    std::optional<visual_inertial::msg::LocalizationCommand> waitForLocalizationCommand_(
+        uint64_t kf_id)
+    {
+        std::unique_lock<std::mutex> lk(localization_cmd_mtx_);
+        localization_cmd_cv_.wait_for(
+            lk,
+            std::chrono::duration<double, std::milli>(node_cfg_.localization_command_wait_ms),
+            [&]
+            { return stop_.load() || localization_cmd_by_kf_.count(kf_id) > 0; });
+
+        auto it = localization_cmd_by_kf_.find(kf_id);
+        if (it == localization_cmd_by_kf_.end())
+        {
+            return std::nullopt;
+        }
+
+        auto msg = it->second;
+        localization_cmd_by_kf_.erase(it);
+        for (auto stale = localization_cmd_by_kf_.begin(); stale != localization_cmd_by_kf_.end();)
+        {
+            if (stale->first < kf_id)
+            {
+                stale = localization_cmd_by_kf_.erase(stale);
+            }
+            else
+            {
+                ++stale;
+            }
+        }
+        return msg;
+    }
+
     PreparedOptimizationUpdate prepareOptimizationUpdate_(
-        const visual_inertial::msg::Keyframe &msg) const
+        const visual_inertial::msg::Keyframe &msg)
     {
         PreparedOptimizationUpdate update;
         update.event = toKeyframeEvent(msg);
@@ -446,25 +453,38 @@ private:
             update.between_meas = update.event.T_Bkm1_Bk;
         }
 
-        if (!node_cfg_.localization_mode ||
-            !localization_ ||
-            !localization_use_tag_priors_)
+        if (!node_cfg_.localization_mode)
         {
             return update;
         }
 
-        update.localization_decision = localization_->processKeyframe(
-            rclcpp::Time(msg.header.stamp).nanoseconds(),
-            update.event.T_OB);
+        auto command = waitForLocalizationCommand_(msg.kf_id);
+        if (!command.has_value())
+        {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Localization mode is enabled but no LocalizationCommand arrived for kf_id=%lu within %.1f ms; proceeding without localization inputs",
+                static_cast<unsigned long>(msg.kf_id),
+                node_cfg_.localization_command_wait_ms);
+            return update;
+        }
 
-        for (const auto &prior : update.localization_decision->optimizer_inputs.absolute_pose_priors)
+        update.localization_command = std::move(command);
+
+        for (const auto &prior : update.localization_command->absolute_pose_priors)
         {
             update.absolute_pose_priors.push_back(toAbsolutePosePrior(prior));
         }
-        update.T_WB_init_override =
-            update.localization_decision->optimizer_inputs.T_WB_init_override;
-        update.T_WB_anchor_override =
-            update.localization_decision->optimizer_inputs.T_WB_anchor_override;
+        if (update.localization_command->has_init_override)
+        {
+            update.T_WB_init_override =
+                poseMsgToIso(update.localization_command->pose_wb_init_override);
+        }
+        if (update.localization_command->has_anchor_override)
+        {
+            update.T_WB_anchor_override =
+                poseMsgToIso(update.localization_command->pose_wb_anchor_override);
+        }
 
         return update;
     }
@@ -473,33 +493,33 @@ private:
         const PreparedOptimizationUpdate &update,
         OptimizationModule &optimization)
     {
-        if (!update.localization_decision.has_value())
+        if (!update.localization_command.has_value())
         {
             return;
         }
 
-        const auto &decision = *update.localization_decision;
+        const auto &command = *update.localization_command;
 
-        if (decision.action == visual_inertial_localization::LocalizationAction::Bootstrap)
+        if (command.action == visual_inertial::msg::LocalizationCommand::ACTION_BOOTSTRAP)
         {
             optimization.reset();
-            if (decision.bootstrap.has_value())
+            if (command.has_bootstrap_info)
             {
                 RCLCPP_INFO(
                     get_logger(),
                     "Localization bootstrap established: support=%zu score=%.1f; switching from odometry-only to map-localized tracking",
-                    decision.bootstrap->support_count,
-                    decision.bootstrap->score);
+                    static_cast<size_t>(command.bootstrap_support_count),
+                    command.bootstrap_score);
             }
         }
-        else if (decision.waiting_for_bootstrap)
+        else if (command.waiting_for_bootstrap)
         {
             RCLCPP_INFO_THROTTLE(
                 get_logger(), *get_clock(), 2000,
                 "Localization mode has not seen a stable mapped tag yet; running in pure odometry until first bootstrap");
         }
 
-        if (decision.action == visual_inertial_localization::LocalizationAction::Relocalize)
+        if (command.action == visual_inertial::msg::LocalizationCommand::ACTION_RELOCALIZE)
         {
             optimization.reset();
             RCLCPP_INFO(
@@ -507,15 +527,15 @@ private:
                 "Localization graph reset for relocalization at incoming kf_id=%lu",
                 static_cast<unsigned long>(update.event.kf_id));
 
-            if (decision.relocalization.has_value())
+            if (command.has_relocalization_info)
             {
                 RCLCPP_WARN_THROTTLE(
                     get_logger(), *get_clock(), 2000,
                     "Localization relocalization trigger: history_frames=%zu support=%zu map_odom_trans_error=%.3f m map_odom_rot_error=%.1f deg",
-                    decision.relocalization->frame_support,
-                    decision.relocalization->support_count,
-                    decision.relocalization->translation_error_m,
-                    decision.relocalization->rotation_error_rad * 180.0 / M_PI);
+                    static_cast<size_t>(command.relocalization_frame_support),
+                    static_cast<size_t>(command.relocalization_support_count),
+                    command.relocalization_translation_error_m,
+                    command.relocalization_rotation_error_rad * 180.0 / M_PI);
             }
         }
     }
@@ -581,13 +601,13 @@ private:
         return T_map_odom;
     }
 
-    void updateLocalizationMapOdom_(const Eigen::Isometry3d &T_map_odom)
+    void publishLocalizationFeedback_(
+        const visual_inertial::msg::Keyframe &msg,
+        const OptimizationResult &result)
     {
-        if (localization_ &&
-            localization_->state() ==
-                visual_inertial_localization::LocalizationState::Localized)
+        if (localization_feedback_pub_)
         {
-            localization_->updateMapOdomEstimate(T_map_odom);
+            localization_feedback_pub_->publish(makeLocalizationFeedbackMsg(msg, result));
         }
     }
 
@@ -601,8 +621,8 @@ private:
         publishImuBias_(msg, result);
         publishOptimizationResult_(msg, result);
         publishLandmarks_(optimization);
-        const auto T_map_odom = updateMapOdomTarget_(msg, result);
-        updateLocalizationMapOdom_(T_map_odom);
+        updateMapOdomTarget_(msg, result);
+        publishLocalizationFeedback_(msg, result);
     }
 
     // Setup
@@ -630,6 +650,13 @@ private:
                 node_cfg_.optimization_result_topic, bias_qos);
         }
 
+        if (node_cfg_.localization_mode)
+        {
+            localization_feedback_pub_ =
+                this->create_publisher<visual_inertial::msg::LocalizationFeedback>(
+                    node_cfg_.localization_feedback_topic, bias_qos);
+        }
+
         if (node_cfg_.publish_optimized_landmarks)
         {
             auto lm_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile();
@@ -641,7 +668,6 @@ private:
     {
         auto kf_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
         auto info_qos = rclcpp::SensorDataQoS();
-        auto tag_qos = rclcpp::SensorDataQoS();
 
         left_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
             node_cfg_.left_info_topic, info_qos,
@@ -651,12 +677,13 @@ private:
             node_cfg_.right_info_topic, info_qos,
             std::bind(&OptimizationNode::onRightCameraInfo_, this, std::placeholders::_1));
 
-        if (node_cfg_.localization_mode && localization_)
+        if (node_cfg_.localization_mode)
         {
-            tag_sub_ = create_subscription<apriltag_msgs::msg::AprilTagDetectionArray>(
-                localization_->config().tag_topic,
-                tag_qos,
-                std::bind(&OptimizationNode::onTagDetections_, this, std::placeholders::_1));
+            localization_cmd_sub_ =
+                create_subscription<visual_inertial::msg::LocalizationCommand>(
+                    node_cfg_.localization_command_topic,
+                    kf_qos,
+                    std::bind(&OptimizationNode::onLocalizationCommand_, this, std::placeholders::_1));
         }
 
         kf_sub_ = create_subscription<visual_inertial::msg::Keyframe>(
@@ -697,6 +724,16 @@ private:
         else
         {
             RCLCPP_INFO(get_logger(), "Optimization result publishing disabled");
+        }
+
+        if (node_cfg_.localization_mode)
+        {
+            RCLCPP_INFO(
+                get_logger(),
+                "Localization command topic='%s' feedback topic='%s' wait=%.1f ms",
+                node_cfg_.localization_command_topic.c_str(),
+                node_cfg_.localization_feedback_topic.c_str(),
+                node_cfg_.localization_command_wait_ms);
         }
     }
 
@@ -850,32 +887,18 @@ private:
         q_cv_.notify_one();
     }
 
-    void onTagDetections_(apriltag_msgs::msg::AprilTagDetectionArray::SharedPtr msg)
+    void onLocalizationCommand_(visual_inertial::msg::LocalizationCommand::SharedPtr msg)
     {
-        if (!node_cfg_.localization_mode || !localization_ || !localization_use_tag_priors_ || !tf_buffer_ || !msg)
+        if (!msg)
         {
             return;
         }
 
-        const auto report = localization_->ingestDetections(
-            *msg, node_cfg_.body_frame_id, node_cfg_.odom_frame_id, *tf_buffer_);
-        const auto stable_correction =
-            localization_->estimateStableCorrection(rclcpp::Time(msg->header.stamp));
-        RCLCPP_INFO_THROTTLE(
-            get_logger(), *get_clock(), 2000,
-            "Localization tag ingest: detections=%zu accepted=%zu skipped_unmapped=%zu "
-            "skipped_hamming=%zu skipped_margin=%zu skipped_tf=%zu skipped_range=%zu skipped_oblique=%zu buffered=%zu stable_frames=%zu stable_support=%zu",
-            report.total_detections,
-            report.accepted,
-            report.skipped_unmapped,
-            report.skipped_hamming,
-            report.skipped_margin,
-            report.skipped_tf_lookup,
-            report.skipped_range,
-            report.skipped_oblique,
-            report.buffered,
-            stable_correction.has_value() ? stable_correction->frame_support : 0,
-            stable_correction.has_value() ? stable_correction->support_count : 0);
+        {
+            std::lock_guard<std::mutex> lk(localization_cmd_mtx_);
+            localization_cmd_by_kf_[msg->kf_id] = *msg;
+        }
+        localization_cmd_cv_.notify_all();
     }
 
     // Worker/runtime flow
@@ -969,8 +992,6 @@ private:
     std::unique_ptr<visual_inertial::OptimizationNodeParamHandler> param_handler_;
     visual_inertial::OptimizationNodeConfig node_cfg_;
     std::unique_ptr<OptimizationModule> optimization_;
-    std::unique_ptr<visual_inertial_localization::LocalizationModule> localization_;
-    bool localization_use_tag_priors_{false};
 
     // TF interfaces and latest published map->odom state
     rclcpp::TimerBase::SharedPtr tf_timer_;
@@ -989,12 +1010,18 @@ private:
 
     // ROS interfaces
     rclcpp::Subscription<visual_inertial::msg::Keyframe>::SharedPtr kf_sub_;
-    rclcpp::Subscription<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr tag_sub_;
+    rclcpp::Subscription<visual_inertial::msg::LocalizationCommand>::SharedPtr localization_cmd_sub_;
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_sub_;
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_sub_;
     rclcpp::Publisher<visual_inertial::msg::ImuBias>::SharedPtr bias_pub_;
+    rclcpp::Publisher<visual_inertial::msg::LocalizationFeedback>::SharedPtr localization_feedback_pub_;
     rclcpp::Publisher<visual_inertial::msg::OptimizationResult>::SharedPtr optimization_result_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lm_pub_;
+
+    // Localization command ingress
+    std::mutex localization_cmd_mtx_;
+    std::condition_variable localization_cmd_cv_;
+    std::unordered_map<uint64_t, visual_inertial::msg::LocalizationCommand> localization_cmd_by_kf_;
 
     // Worker-side keyframe queue and thread
     std::mutex q_mtx_;

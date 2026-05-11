@@ -125,6 +125,17 @@ visual_inertial_optimization:
     landmark_topic: optimized_landmarks
 
     lm_fetch_max: 0
+    localization_command_topic: localization_command
+    localization_feedback_topic: localization_feedback
+    localization_command_wait_ms: 50.0
+
+visual_inertial_localization:
+  ros__parameters:
+    keyframe_topic: keyframes
+    body_frame_id: camera0_imu_frame
+    odom_frame_id: odom
+    localization_command_topic: localization_command
+    localization_feedback_topic: localization_feedback
 
     # Localization mode inputs and tuning
     localization_tag_map_path: "/tmp/online_mapping_sessions/session_20260423_212723/offline_global_graph/optimized_tags.yaml"

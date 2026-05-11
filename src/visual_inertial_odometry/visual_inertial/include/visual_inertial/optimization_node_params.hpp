@@ -2,11 +2,9 @@
 
 #include <optional>
 #include <string>
-#include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 
-#include <visual_inertial_localization/localization.hpp>
 #include <visual_inertial_optimization/optimization.hpp>
 
 namespace visual_inertial
@@ -30,13 +28,15 @@ struct OptimizationNodeConfig
     bool publish_optimized_landmarks{true};
     std::string landmark_topic{"optimized_landmarks"};
     size_t lm_fetch_max{0};
+    std::string localization_command_topic{"localization_command"};
+    std::string localization_feedback_topic{"localization_feedback"};
+    double localization_command_wait_ms{50.0};
 };
 
 struct OptimizationNodeParams
 {
     OptimizationNodeConfig node;
     OptimizationConfig optimizer;
-    std::optional<visual_inertial_localization::LocalizationConfig> localization;
 };
 
 class OptimizationNodeParamHandler
@@ -49,9 +49,7 @@ public:
 private:
     void declareNodeParams_();
     void declareOptimizerParams_();
-    void declareLocalizationParams_();
     void parseBodyCameraExtrinsics_();
-    void parseTagFrameOverrides_();
     void validateOperationMode_();
 
     rclcpp::Node &node_;
