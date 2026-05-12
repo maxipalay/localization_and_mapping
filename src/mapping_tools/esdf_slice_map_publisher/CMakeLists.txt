@@ -12,6 +12,8 @@ find_package(sensor_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 add_executable(esdf_slice_map_publisher_node
+  src/map_io.cpp
+  src/map_conversion.cpp
   src/esdf_slice_map_publisher_node.cpp
 )
 
