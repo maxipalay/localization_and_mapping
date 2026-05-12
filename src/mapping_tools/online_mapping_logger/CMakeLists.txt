@@ -23,6 +23,9 @@ add_executable(online_mapping_logger_node
 add_library(online_mapping_logger_core
   src/keyframe_assembler.cpp
   src/session_writer.cpp
+  src/session_writer_layout.cpp
+  src/session_writer_manifest.cpp
+  src/session_writer_records.cpp
 )
 
 target_include_directories(online_mapping_logger_core PUBLIC
