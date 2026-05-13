@@ -26,6 +26,12 @@ find_package(std_msgs REQUIRED)
 find_package(Boost REQUIRED COMPONENTS serialization)
 find_package(eigen3_cmake_module REQUIRED)
 
+add_library(visual_inertial_transport STATIC
+  src/transport/common_transport.cpp
+  src/transport/frontend_transport.cpp
+  src/transport/localization_transport.cpp
+  src/transport/optimization_transport.cpp)
+
 add_executable(tracking_node src/tracking_node.cpp)
 add_executable(localization_node src/localization_node.cpp)
 add_executable(optimization_node
@@ -34,7 +40,22 @@ add_executable(optimization_node
 add_executable(path_viz_node src/path_viz_node.cpp)
 add_executable(tracks_viz_node src/tracks_viz_node.cpp)
 
+target_include_directories(visual_inertial_transport
+  PUBLIC include
+  PRIVATE ${OpenCV_INCLUDE_DIRS})
+
 target_include_directories(optimization_node PRIVATE include)
+
+ament_target_dependencies(visual_inertial_transport
+  builtin_interfaces
+  geometry_msgs
+  rclcpp
+  sensor_msgs
+  std_msgs
+  visual_inertial_common
+  visual_inertial_frontend
+  visual_inertial_localization
+  visual_inertial_optimization)
 
 # Pull include dirs/defs from deps (including your lib)
 ament_target_dependencies(tracking_node
@@ -55,16 +76,19 @@ ament_target_dependencies(path_viz_node
 target_link_libraries(tracking_node
   visual_inertial_frontend::visual_inertial_frontend
   visual_inertial_common::visual_inertial_common
+  visual_inertial_transport
 )
 
 target_link_libraries(optimization_node
   visual_inertial_optimization::visual_inertial_optimization
   visual_inertial_common::visual_inertial_common
+  visual_inertial_transport
   TBB::tbb
 )
 
 target_link_libraries(localization_node
   visual_inertial_localization::visual_inertial_localization
+  visual_inertial_transport
 )
 
 install(TARGETS tracking_node localization_node optimization_node path_viz_node tracks_viz_node
@@ -86,6 +110,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 
 rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_typesupport_cpp")
+target_link_libraries(visual_inertial_transport "${cpp_typesupport_target}")
 target_link_libraries(tracking_node "${cpp_typesupport_target}")
 target_link_libraries(localization_node "${cpp_typesupport_target}")
 target_link_libraries(tracks_viz_node "${cpp_typesupport_target}")

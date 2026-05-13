@@ -11,13 +11,15 @@
 #include <visual_inertial/msg/keyframe.hpp>
 #include <visual_inertial/msg/optimization_result.hpp>
 #include <visual_inertial/optimization_node_params.hpp>
+#include <visual_inertial/transport/common_transport.hpp>
+#include <visual_inertial/transport/localization_transport.hpp>
+#include <visual_inertial/transport/optimization_transport.hpp>
 
 #include <visual_inertial_common/types.hpp>
 #include <visual_inertial_optimization/optimization.hpp>
 #include <visual_inertial_optimization/types.hpp>
 
 #include <sensor_msgs/msg/point_cloud2.hpp>
-#include <sensor_msgs/point_cloud2_iterator.hpp>
 
 #include <opencv2/core.hpp>
 
@@ -42,155 +44,6 @@
 
 namespace
 {
-
-    static Eigen::Isometry3d poseMsgToIso(const geometry_msgs::msg::Pose &p)
-    {
-        Eigen::Quaterniond q(p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z);
-        q.normalize();
-        Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
-        T.linear() = q.toRotationMatrix();
-        T.translation() = Eigen::Vector3d(p.position.x, p.position.y, p.position.z);
-        return T;
-    }
-
-    static geometry_msgs::msg::TransformStamped isoToTf(
-        const Eigen::Isometry3d &T_parent_child,
-        const rclcpp::Time &stamp,
-        const std::string &parent_frame,
-        const std::string &child_frame)
-    {
-        geometry_msgs::msg::TransformStamped tf;
-        tf.header.stamp = stamp;
-        tf.header.frame_id = parent_frame;
-        tf.child_frame_id = child_frame;
-
-        tf.transform.translation.x = T_parent_child.translation().x();
-        tf.transform.translation.y = T_parent_child.translation().y();
-        tf.transform.translation.z = T_parent_child.translation().z();
-
-        Eigen::Quaterniond q(T_parent_child.linear());
-        q.normalize();
-        tf.transform.rotation.w = q.w();
-        tf.transform.rotation.x = q.x();
-        tf.transform.rotation.y = q.y();
-        tf.transform.rotation.z = q.z();
-
-        return tf;
-    }
-
-    static geometry_msgs::msg::Pose isoToPoseMsg(const Eigen::Isometry3d &T)
-    {
-        geometry_msgs::msg::Pose pose;
-        pose.position.x = T.translation().x();
-        pose.position.y = T.translation().y();
-        pose.position.z = T.translation().z();
-
-        Eigen::Quaterniond q(T.linear());
-        q.normalize();
-        pose.orientation.w = q.w();
-        pose.orientation.x = q.x();
-        pose.orientation.y = q.y();
-        pose.orientation.z = q.z();
-
-        return pose;
-    }
-
-    static Eigen::Isometry3d transformMsgToIso(const geometry_msgs::msg::Transform &t)
-    {
-        Eigen::Quaterniond q(t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z);
-        q.normalize();
-        Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
-        T.linear() = q.toRotationMatrix();
-        T.translation() = Eigen::Vector3d(
-            t.translation.x,
-            t.translation.y,
-            t.translation.z);
-        return T;
-    }
-
-    static AbsolutePosePrior toAbsolutePosePrior(
-        const visual_inertial::msg::LocalizationPosePrior &prior)
-    {
-        AbsolutePosePrior out;
-        out.T_WB = poseMsgToIso(prior.pose_wb);
-        out.rot_sigma_rad = prior.rot_sigma_rad;
-        out.trans_sigma_m = prior.trans_sigma_m;
-        out.huber_k = prior.huber_k;
-        return out;
-    }
-
-    static visual_inertial::msg::LocalizationFeedback makeLocalizationFeedbackMsg(
-        const visual_inertial::msg::Keyframe &msg,
-        const OptimizationResult &result)
-    {
-        visual_inertial::msg::LocalizationFeedback out;
-        out.header = msg.header;
-        out.kf_id = result.kf_id;
-
-        const Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_odom_body);
-        const Eigen::Isometry3d T_map_B = result.T_WB_opt;
-        out.pose_map_odom = isoToPoseMsg(T_map_B * T_odom_B.inverse());
-        return out;
-    }
-
-    static KeyframeEvent toKeyframeEvent(const visual_inertial::msg::Keyframe &msg)
-    {
-        KeyframeEvent ev;
-        ev.kf_id = msg.kf_id;
-        ev.t_start = msg.t_start; // rclcpp::Time(msg.header.stamp).seconds();
-        ev.t_end = msg.t_end;
-
-        // Frontend-exported pose: odom/startup frame <- body
-        ev.T_OB = poseMsgToIso(msg.pose_odom_body);
-        ev.has_vo_between = (msg.has_vo_between != 0);
-        if (ev.has_vo_between)
-        {
-            ev.T_Bkm1_Bk = poseMsgToIso(msg.between_pose_prev_curr);
-        }
-        ev.interval_health.num_frames = msg.interval_health.num_frames;
-        ev.interval_health.num_pose_valid_frames = msg.interval_health.num_pose_valid_frames;
-        ev.interval_health.num_degraded_frames = msg.interval_health.num_degraded_frames;
-        ev.interval_health.num_lost_frames = msg.interval_health.num_lost_frames;
-        ev.interval_health.min_tracks = msg.interval_health.min_tracks;
-        ev.interval_health.mean_tracks = msg.interval_health.mean_tracks;
-        ev.interval_health.min_track_retention = msg.interval_health.min_track_retention;
-        ev.interval_health.mean_track_retention = msg.interval_health.mean_track_retention;
-        ev.interval_health.mean_pnp_inlier_ratio = msg.interval_health.mean_pnp_inlier_ratio;
-        ev.interval_health.max_pnp_reproj_rmse_px = msg.interval_health.max_pnp_reproj_rmse_px;
-        ev.interval_health.min_track_coverage = msg.interval_health.min_track_coverage;
-        ev.interval_health.mean_track_coverage = msg.interval_health.mean_track_coverage;
-
-        const size_t n = msg.track_ids.size();
-        if (msg.u_l.size() != n || msg.v_l.size() != n ||
-            msg.u_r.size() != n || msg.v_r.size() != n ||
-            msg.has_right.size() != n)
-        {
-            ev.ids.clear();
-            ev.pl.clear();
-            ev.pr.clear();
-            ev.has_r.clear();
-            return ev;
-        }
-
-        ev.ids.resize(n);
-        ev.pl.resize(n);
-        ev.pr.resize(n);
-        ev.has_r.resize(n);
-
-        for (size_t i = 0; i < n; ++i)
-        {
-            ev.ids[i] = msg.track_ids[i];
-            ev.pl[i] = cv::Point2f(msg.u_l[i], msg.v_l[i]);
-            ev.pr[i] = cv::Point2f(msg.u_r[i], msg.v_r[i]);
-            ev.has_r[i] = msg.has_right[i];
-        }
-
-        ev.has_imu = (msg.has_imu != 0);
-        ev.pim_bytes = msg.pim_bytes; // uint8[] -> std::vector<uint8_t>
-
-        return ev;
-    }
-
     static CameraRig makeStereoModel(
         const sensor_msgs::msg::CameraInfo &L,
         const sensor_msgs::msg::CameraInfo &R)
@@ -222,129 +75,6 @@ namespace
 
         return rig;
     }
-
-    static visual_inertial::msg::ImuBias makeImuBiasMsg(
-        const visual_inertial::msg::Keyframe &msg,
-        const OptimizationResult &result)
-    {
-        visual_inertial::msg::ImuBias out;
-        out.header.stamp = msg.header.stamp;
-        out.header.frame_id = "base_link";
-        out.kf_id = result.kf_id;
-
-        out.accel_bias.x = result.bias_opt.accel.x();
-        out.accel_bias.y = result.bias_opt.accel.y();
-        out.accel_bias.z = result.bias_opt.accel.z();
-
-        out.gyro_bias.x = result.bias_opt.gyro.x();
-        out.gyro_bias.y = result.bias_opt.gyro.y();
-        out.gyro_bias.z = result.bias_opt.gyro.z();
-
-        return out;
-    }
-
-    static visual_inertial::msg::OptimizationResult makeOptimizationResultMsg(
-        const visual_inertial::msg::Keyframe &msg,
-        const OptimizationResult &result,
-        const std::string &map_frame_id)
-    {
-        visual_inertial::msg::OptimizationResult out;
-        out.header.stamp = msg.header.stamp;
-        out.header.frame_id = map_frame_id;
-        out.kf_id = result.kf_id;
-        out.t_s = result.t_s;
-        out.pose_wc_opt = isoToPoseMsg(result.T_WC_opt);
-        out.pose_wb_opt = isoToPoseMsg(result.T_WB_opt);
-        out.active_keyframe_poses.reserve(result.active_keyframe_poses.size());
-
-        for (const auto &active_pose : result.active_keyframe_poses)
-        {
-            visual_inertial::msg::OptimizedKeyframePose active_pose_msg;
-            active_pose_msg.kf_id = active_pose.kf_id;
-            active_pose_msg.pose_wc_opt = isoToPoseMsg(active_pose.T_WC_opt);
-            active_pose_msg.pose_wb_opt = isoToPoseMsg(active_pose.T_WB_opt);
-            out.active_keyframe_poses.push_back(std::move(active_pose_msg));
-        }
-
-        out.stats.num_keyframes_in_window = result.stats.num_keyframes_in_window;
-        out.stats.num_landmarks_alive = result.stats.num_landmarks_alive;
-        out.stats.num_landmarks_created = result.stats.num_landmarks_created;
-        out.stats.num_stereo_factors_added = result.stats.num_stereo_factors_added;
-        out.stats.num_imu_factors_added = result.stats.num_imu_factors_added;
-        out.stats.num_between_factors_added = result.stats.num_between_factors_added;
-        out.stats.num_prior_factors_added = result.stats.num_prior_factors_added;
-        out.stats.had_vo_between_measurement = result.stats.had_vo_between_measurement;
-        out.stats.used_vo_between_factor = result.stats.used_vo_between_factor;
-        out.stats.skipped_vo_between_factor = result.stats.skipped_vo_between_factor;
-        out.stats.vo_between_quality = result.stats.vo_between_quality;
-        out.stats.vo_between_sigma_scale = result.stats.vo_between_sigma_scale;
-        out.stats.imu_only_update = result.stats.imu_only_update;
-        out.stats.update_iterations = result.stats.update_iterations;
-        out.stats.update_intermediate_steps = result.stats.update_intermediate_steps;
-        out.stats.update_nonlinear_variables = result.stats.update_nonlinear_variables;
-        out.stats.update_linear_variables = result.stats.update_linear_variables;
-        out.stats.final_error = result.stats.final_error;
-        out.stats.has_error_before = result.stats.has_error_before;
-        out.stats.error_before = result.stats.error_before;
-        out.stats.has_error_after = result.stats.has_error_after;
-        out.stats.error_after = result.stats.error_after;
-        out.stats.variables_relinearized = result.stats.variables_relinearized;
-        out.stats.variables_reeliminated = result.stats.variables_reeliminated;
-        out.stats.factors_recalculated = result.stats.factors_recalculated;
-        out.stats.cliques = result.stats.cliques;
-        out.has_velocity = result.has_velocity;
-        out.velocity_opt.x = result.velocity_opt.x();
-        out.velocity_opt.y = result.velocity_opt.y();
-        out.velocity_opt.z = result.velocity_opt.z();
-        out.accel_bias.x = result.bias_opt.accel.x();
-        out.accel_bias.y = result.bias_opt.accel.y();
-        out.accel_bias.z = result.bias_opt.accel.z();
-        out.gyro_bias.x = result.bias_opt.gyro.x();
-        out.gyro_bias.y = result.bias_opt.gyro.y();
-        out.gyro_bias.z = result.bias_opt.gyro.z();
-        out.has_pose_wb_covariance = result.has_pose_wb_covariance;
-        out.pose_wb_covariance = result.pose_wb_covariance;
-        out.has_velocity_covariance = result.has_velocity_covariance;
-        out.velocity_covariance = result.velocity_covariance;
-        out.has_bias_covariance = result.has_bias_covariance;
-        out.bias_covariance = result.bias_covariance;
-
-        return out;
-    }
-
-    static sensor_msgs::msg::PointCloud2 makeLandmarkPointCloudMsg(
-        const std::vector<LandmarkEstimate> &landmarks,
-        const rclcpp::Time &stamp,
-        const std::string &frame_id)
-    {
-        sensor_msgs::msg::PointCloud2 out;
-        out.header.stamp = stamp;
-        out.header.frame_id = frame_id;
-        out.height = 1;
-        out.width = static_cast<uint32_t>(landmarks.size());
-        out.is_dense = false;
-
-        sensor_msgs::PointCloud2Modifier mod(out);
-        mod.setPointCloud2FieldsByString(1, "xyz");
-        mod.resize(landmarks.size());
-
-        sensor_msgs::PointCloud2Iterator<float> it_x(out, "x");
-        sensor_msgs::PointCloud2Iterator<float> it_y(out, "y");
-        sensor_msgs::PointCloud2Iterator<float> it_z(out, "z");
-
-        for (const auto &lm : landmarks)
-        {
-            *it_x = static_cast<float>(lm.p_W.x());
-            *it_y = static_cast<float>(lm.p_W.y());
-            *it_z = static_cast<float>(lm.p_W.z());
-            ++it_x;
-            ++it_y;
-            ++it_z;
-        }
-
-        return out;
-    }
-
 } // namespace
 
 class OptimizationNode final : public rclcpp::Node
@@ -446,7 +176,7 @@ private:
         const visual_inertial::msg::Keyframe &msg)
     {
         PreparedOptimizationUpdate update;
-        update.event = toKeyframeEvent(msg);
+        update.event = visual_inertial::transport::toKeyframeEvent(msg);
 
         if (update.event.has_vo_between)
         {
@@ -473,17 +203,20 @@ private:
 
         for (const auto &prior : update.localization_command->absolute_pose_priors)
         {
-            update.absolute_pose_priors.push_back(toAbsolutePosePrior(prior));
+            update.absolute_pose_priors.push_back(
+                visual_inertial::transport::toAbsolutePosePrior(prior));
         }
         if (update.localization_command->has_init_override)
         {
             update.T_WB_init_override =
-                poseMsgToIso(update.localization_command->pose_wb_init_override);
+                visual_inertial::transport::poseMsgToIso(
+                    update.localization_command->pose_wb_init_override);
         }
         if (update.localization_command->has_anchor_override)
         {
             update.T_WB_anchor_override =
-                poseMsgToIso(update.localization_command->pose_wb_anchor_override);
+                visual_inertial::transport::poseMsgToIso(
+                    update.localization_command->pose_wb_anchor_override);
         }
 
         return update;
@@ -568,7 +301,7 @@ private:
         const visual_inertial::msg::Keyframe &msg,
         const OptimizationResult &result)
     {
-        bias_pub_->publish(makeImuBiasMsg(msg, result));
+        bias_pub_->publish(visual_inertial::transport::makeImuBiasMsg(msg, result));
     }
 
     void publishOptimizationResult_(
@@ -581,14 +314,16 @@ private:
         }
 
         optimization_result_pub_->publish(
-            makeOptimizationResultMsg(msg, result, node_cfg_.map_frame_id));
+            visual_inertial::transport::makeOptimizationResultMsg(
+                msg, result, node_cfg_.map_frame_id));
     }
 
     Eigen::Isometry3d updateMapOdomTarget_(
         const visual_inertial::msg::Keyframe &msg,
         const OptimizationResult &result)
     {
-        const Eigen::Isometry3d T_odom_B = poseMsgToIso(msg.pose_odom_body);
+        const Eigen::Isometry3d T_odom_B =
+            visual_inertial::transport::poseMsgToIso(msg.pose_odom_body);
         const Eigen::Isometry3d T_map_B = result.T_WB_opt;
         const Eigen::Isometry3d T_map_odom = T_map_B * T_odom_B.inverse();
 
@@ -607,7 +342,8 @@ private:
     {
         if (localization_feedback_pub_)
         {
-            localization_feedback_pub_->publish(makeLocalizationFeedbackMsg(msg, result));
+            localization_feedback_pub_->publish(
+                visual_inertial::transport::makeLocalizationFeedbackMsg(msg, result));
         }
     }
 
@@ -770,7 +506,8 @@ private:
         {
             const auto tf = tf_buffer_->lookupTransform(
                 node_cfg_.body_frame_id, camera_frame, tf2::TimePointZero);
-            optimization_->setBodyCameraExtrinsic(transformMsgToIso(tf.transform));
+            optimization_->setBodyCameraExtrinsic(
+                visual_inertial::transport::transformMsgToIso(tf.transform));
             t_bc_resolved_from_tf_ = true;
 
             const auto &T_BC = optimization_->config().T_BC;
@@ -973,7 +710,8 @@ private:
         }
 
         // publish TF outside the lock
-        auto tf = isoToTf(T_map_odom, now, node_cfg_.map_frame_id, node_cfg_.odom_frame_id);
+        auto tf = visual_inertial::transport::isoToTf(
+            T_map_odom, now, node_cfg_.map_frame_id, node_cfg_.odom_frame_id);
         tf_broadcaster_->sendTransform(tf);
     }
 
@@ -984,7 +722,8 @@ private:
 
         const auto lms = optimization.getLandmarks(node_cfg_.lm_fetch_max);
         lm_pub_->publish(
-            makeLandmarkPointCloudMsg(lms, this->now(), node_cfg_.map_frame_id));
+            visual_inertial::transport::makeLandmarkPointCloudMsg(
+                lms, this->now(), node_cfg_.map_frame_id));
     }
 
 private:

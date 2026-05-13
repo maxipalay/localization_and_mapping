@@ -12,6 +12,8 @@
 #include <limits>
 #include <vector>
 
+#include "visual_inertial/transport/common_transport.hpp"
+#include "visual_inertial/transport/frontend_transport.hpp"
 #include "visual_inertial_frontend/types.hpp"
 #include "visual_inertial_frontend/odometry.hpp"
 
@@ -84,27 +86,6 @@ inline double rotationAngleRad(const cv::Matx33d &R)
     double c = (tr - 1.0) * 0.5;
     c = std::max(-1.0, std::min(1.0, c));
     return std::acos(c);
-}
-
-static inline builtin_interfaces::msg::Time toStamp(double tsec)
-{
-    builtin_interfaces::msg::Time s{};
-    s.sec = static_cast<int32_t>(tsec);
-    s.nanosec = static_cast<uint32_t>((tsec - s.sec) * 1e9);
-    return s;
-}
-
-static inline Eigen::Isometry3d transformMsgToIso(const geometry_msgs::msg::Transform &t)
-{
-    Eigen::Quaterniond q(t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z);
-    q.normalize();
-    Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
-    T.linear() = q.toRotationMatrix();
-    T.translation() = Eigen::Vector3d(
-        t.translation.x,
-        t.translation.y,
-        t.translation.z);
-    return T;
 }
 
 class FeatureNode : public rclcpp::Node
@@ -516,35 +497,16 @@ private:
         tf_msg.transform.rotation.z = q.z();
         tf_broadcaster_->sendTransform(tf_msg);
 
-        visual_inertial::msg::Tracks tracks_msg;
-        tracks_msg.header.stamp = left_msg->header.stamp;
+        tracks_pub_->publish(
+            visual_inertial::transport::makeTracksMsg(
+                left_msg->header.stamp,
+                result.tracks));
 
-        const auto N = result.tracks.size();
-        tracks_msg.u_l.resize(N);
-        tracks_msg.v_l.resize(N);
-
-        for (size_t i = 0; i < N; ++i)
-        {
-            tracks_msg.u_l[i] = result.tracks[i].x;
-            tracks_msg.v_l[i] = result.tracks[i].y;
-        }
-
-        tracks_pub_->publish(tracks_msg);
-
-        visual_inertial::msg::FrontendHealth health_msg;
-        health_msg.header.stamp = left_msg->header.stamp;
-        health_msg.header.frame_id = parent_frame_;
-        health_msg.num_tracks = result.health.num_tracks;
-        health_msg.num_stereo_tracks = result.health.num_stereo_tracks;
-        health_msg.num_pnp_candidates = result.health.num_pnp_candidates;
-        health_msg.num_pnp_inliers = result.health.num_pnp_inliers;
-        health_msg.pnp_inlier_ratio = result.health.pnp_inlier_ratio;
-        health_msg.pnp_reproj_rmse_px = result.health.pnp_reproj_rmse_px;
-        health_msg.track_coverage = result.health.track_coverage;
-        health_msg.track_retention = result.health.track_retention;
-        health_msg.pose_update_valid = result.health.pose_update_valid;
-        health_msg.state = result.health.state;
-        frontend_health_pub_->publish(health_msg);
+        frontend_health_pub_->publish(
+            visual_inertial::transport::makeFrontendHealthMsg(
+                left_msg->header.stamp,
+                parent_frame_,
+                result.health));
 
 
         auto t1 = std::chrono::steady_clock::now();
@@ -592,67 +554,7 @@ private:
 
     void publishKeyframe_(KeyframeEvent &ev)
     {
-        visual_inertial::msg::Keyframe msg;
-        msg.header.stamp = toStamp(ev.t_end);
-        msg.header.frame_id = "odom";
-        msg.kf_id = ev.kf_id;
-        msg.t_start = ev.t_start;
-        msg.t_end = ev.t_end;
-
-        msg.pose_odom_body.position.x = ev.T_OB.translation().x();
-        msg.pose_odom_body.position.y = ev.T_OB.translation().y();
-        msg.pose_odom_body.position.z = ev.T_OB.translation().z();
-        Eigen::Quaterniond q(ev.T_OB.rotation());
-        msg.pose_odom_body.orientation.w = q.w();
-        msg.pose_odom_body.orientation.x = q.x();
-        msg.pose_odom_body.orientation.y = q.y();
-        msg.pose_odom_body.orientation.z = q.z();
-
-        msg.has_vo_between = ev.has_vo_between ? uint8_t{1} : uint8_t{0};
-        const Eigen::Quaterniond q_between(ev.T_Bkm1_Bk.rotation());
-        msg.between_pose_prev_curr.position.x = ev.T_Bkm1_Bk.translation().x();
-        msg.between_pose_prev_curr.position.y = ev.T_Bkm1_Bk.translation().y();
-        msg.between_pose_prev_curr.position.z = ev.T_Bkm1_Bk.translation().z();
-        msg.between_pose_prev_curr.orientation.w = q_between.w();
-        msg.between_pose_prev_curr.orientation.x = q_between.x();
-        msg.between_pose_prev_curr.orientation.y = q_between.y();
-        msg.between_pose_prev_curr.orientation.z = q_between.z();
-
-        msg.interval_health.num_frames = ev.interval_health.num_frames;
-        msg.interval_health.num_pose_valid_frames = ev.interval_health.num_pose_valid_frames;
-        msg.interval_health.num_degraded_frames = ev.interval_health.num_degraded_frames;
-        msg.interval_health.num_lost_frames = ev.interval_health.num_lost_frames;
-        msg.interval_health.min_tracks = ev.interval_health.min_tracks;
-        msg.interval_health.mean_tracks = ev.interval_health.mean_tracks;
-        msg.interval_health.min_track_retention = ev.interval_health.min_track_retention;
-        msg.interval_health.mean_track_retention = ev.interval_health.mean_track_retention;
-        msg.interval_health.mean_pnp_inlier_ratio = ev.interval_health.mean_pnp_inlier_ratio;
-        msg.interval_health.max_pnp_reproj_rmse_px = ev.interval_health.max_pnp_reproj_rmse_px;
-        msg.interval_health.min_track_coverage = ev.interval_health.min_track_coverage;
-        msg.interval_health.mean_track_coverage = ev.interval_health.mean_track_coverage;
-
-        const auto N = ev.ids.size();
-        msg.track_ids.resize(N);
-        msg.u_l.resize(N);
-        msg.v_l.resize(N);
-        msg.u_r.resize(N);
-        msg.v_r.resize(N);
-        msg.has_right.resize(N);
-
-        for (size_t i = 0; i < N; ++i)
-        {
-            msg.track_ids[i] = ev.ids[i];
-            msg.u_l[i] = ev.pl[i].x;
-            msg.v_l[i] = ev.pl[i].y;
-            msg.u_r[i] = ev.pr[i].x;
-            msg.v_r[i] = ev.pr[i].y;
-            msg.has_right[i] = ev.has_r[i];
-        }
-
-        msg.has_imu = ev.has_imu ? uint8_t{1} : uint8_t{0};
-        msg.pim_bytes = ev.pim_bytes;
-
-        kf_pub_->publish(msg);
+        kf_pub_->publish(visual_inertial::transport::makeKeyframeMsg(ev, "odom"));
     }
 
     CameraRig makeStereoModel(
@@ -752,7 +654,8 @@ private:
         {
             const auto tf = tf_buffer_->lookupTransform(
                 body_frame_, camera_frame, tf2::TimePointZero);
-            const Eigen::Isometry3d T_BC = transformMsgToIso(tf.transform);
+            const Eigen::Isometry3d T_BC =
+                visual_inertial::transport::transformMsgToIso(tf.transform);
             visual_inertial_->setBodyCameraExtrinsic(T_BC);
             t_bc_resolved_from_tf_ = true;
 
@@ -798,7 +701,8 @@ private:
         {
             const auto tf = tf_buffer_->lookupTransform(
                 body_frame_, imu_frame, tf2::TimePointZero);
-            const Eigen::Isometry3d T_BI = transformMsgToIso(tf.transform);
+            const Eigen::Isometry3d T_BI =
+                visual_inertial::transport::transformMsgToIso(tf.transform);
             imu_measurement_frame_ = imu_frame;
             R_body_imu_measurement_ = T_BI.rotation();
             imu_rotation_resolved_ = true;
@@ -839,7 +743,7 @@ private:
         {
             const auto tf = tf_buffer_->lookupTransform(
                 body_frame_, published_child_frame_, tf2::TimePointZero);
-            T_B_P_ = transformMsgToIso(tf.transform);
+            T_B_P_ = visual_inertial::transport::transformMsgToIso(tf.transform);
             publish_child_offset_resolved_ = true;
 
             Eigen::Quaterniond q(T_B_P_.rotation());
