@@ -7,6 +7,7 @@ list(APPEND CMAKE_INSTALL_RPATH "/usr/local/lib")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_gtest REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(OpenCV REQUIRED)  # your OpenCV was already built with CUDA
 find_package(GTSAM REQUIRED)
@@ -64,5 +65,12 @@ install(
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)   # <- same export set
 ament_export_include_directories(include ${_gtsam_eigen})
 ament_export_dependencies(OpenCV sensor_msgs Boost)
+
+if(BUILD_TESTING)
+  ament_add_gtest(test_optimization_module
+    test/test_optimization_module.cpp)
+  target_link_libraries(test_optimization_module
+    ${PROJECT_NAME})
+endif()
 
 ament_package()
