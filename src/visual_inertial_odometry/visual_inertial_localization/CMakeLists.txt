@@ -7,6 +7,7 @@ list(APPEND CMAKE_INSTALL_RPATH "/usr/local/lib")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_gtest REQUIRED)
 find_package(apriltag_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -61,5 +62,17 @@ install(
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
 ament_export_dependencies(apriltag_msgs geometry_msgs rclcpp tf2_ros yaml-cpp Eigen3)
+
+if(BUILD_TESTING)
+  ament_add_gtest(test_localization_engine
+    test/test_localization_engine.cpp)
+  target_link_libraries(test_localization_engine
+    ${PROJECT_NAME})
+
+  ament_add_gtest(test_localization_controller
+    test/test_localization_controller.cpp)
+  target_link_libraries(test_localization_controller
+    ${PROJECT_NAME})
+endif()
 
 ament_package()
