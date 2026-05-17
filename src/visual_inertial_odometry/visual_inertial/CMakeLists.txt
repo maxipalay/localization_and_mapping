@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
+find_package(launch_testing_ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(apriltag_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
@@ -118,5 +119,16 @@ target_link_libraries(optimization_node "${cpp_typesupport_target}")
 
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
 install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
+
+if(BUILD_TESTING)
+  add_launch_test(test/test_mapping_mode_node_graph.py
+    ENV
+      ROS_HOME=${CMAKE_CURRENT_BINARY_DIR}/test_ros_home
+      ROS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test_ros_logs)
+  add_launch_test(test/test_localization_mode_node_graph.py
+    ENV
+      ROS_HOME=${CMAKE_CURRENT_BINARY_DIR}/test_ros_home
+      ROS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test_ros_logs)
+endif()
 
 ament_package()
