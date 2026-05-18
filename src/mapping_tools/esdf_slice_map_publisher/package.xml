@@ -3,9 +3,9 @@
 <package format="3">
   <name>esdf_slice_map_publisher</name>
   <version>0.1.0</version>
-  <description>Load a ROS occupancy-map YAML and publish it for RViz and planning tools.</description>
+  <description>Loads an occupancy map and republishes it in forms that are easy to inspect in RViz and planning tools.</description>
   <maintainer email="maximilianopalay@gmail.com">max</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

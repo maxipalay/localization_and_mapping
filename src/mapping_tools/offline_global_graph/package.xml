@@ -3,9 +3,9 @@
 <package format="3">
   <name>offline_global_graph</name>
   <version>0.1.0</version>
-  <description>Offline global factor-graph builder and optimizer for logged mapping sessions.</description>
+  <description>Builds and solves a global graph offline from recorded mapping sessions.</description>
   <maintainer email="maximilianopalay@gmail.com">max</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

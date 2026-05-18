@@ -1,8 +1,8 @@
-<?xml version="0.0"?>
+<?xml version="1.0"?>
 <package format="3">
   <name>visual_inertial_localization</name>
   <version>0.1.0</version>
-  <description>Visual Inertial Localization Helpers</description>
+  <description>Tag based global pose estimation and correction logic for the visual inertial system.</description>
   <maintainer email="you@example.com">Max Palay</maintainer>
   <license>MIT</license>
 

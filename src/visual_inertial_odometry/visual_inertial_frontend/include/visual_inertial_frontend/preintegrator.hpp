@@ -8,11 +8,10 @@
 
 #include <Eigen/Core>
 
-// Your project types (these already exist in your common/frontend types)
 #include "visual_inertial_common/types.hpp"
 #include "visual_inertial_frontend/types.hpp"
 
-// Assumptions for this FIRST PASS:
+// Assumptions:
 // - IMU timestamps are in the SAME time domain as camera/keyframe timestamps.
 // - No time offset handling.
 // - Half-open interval: integrate (t0, t1] and then drop all samples <= t1

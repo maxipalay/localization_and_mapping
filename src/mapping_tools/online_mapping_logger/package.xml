@@ -3,9 +3,9 @@
 <package format="3">
   <name>online_mapping_logger</name>
   <version>0.1.0</version>
-  <description>Logs a deterministic mapping session dataset from live ROS topics.</description>
+  <description>Records a mapping session from live ROS topics into a deterministic dataset on disk.</description>
   <maintainer email="maximilianopalay@gmail.com">max</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

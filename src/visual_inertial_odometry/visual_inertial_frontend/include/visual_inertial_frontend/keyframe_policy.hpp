@@ -1,7 +1,3 @@
-// Also, for exmaple wi might want to trump some condition based on what triggers.
-//  i.e. if we're starving on tracks, we dont really care that we recently generated a keyframe, we will still generat
-
-// KeyframePolicy.hpp
 #pragma once
 
 #include <Eigen/Geometry>

@@ -3,9 +3,9 @@
 <package format="3">
   <name>ply_pointcloud_viz</name>
   <version>0.1.0</version>
-  <description>Voxelize an ASCII mesh PLY and publish a colored PointCloud2 for RViz.</description>
+  <description>Loads an ASCII PLY mesh, voxelizes it, and publishes a colored point cloud for RViz.</description>
   <maintainer email="maximilianopalay@gmail.com">max</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

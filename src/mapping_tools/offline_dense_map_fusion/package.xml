@@ -3,9 +3,9 @@
 <package format="3">
   <name>offline_dense_map_fusion</name>
   <version>0.1.0</version>
-  <description>Offline dense RGB-D map fusion from optimized keyframe poses.</description>
+  <description>Builds a dense RGBD map offline from logged frames and optimized poses.</description>
   <maintainer email="maximilianopalay@gmail.com">max</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

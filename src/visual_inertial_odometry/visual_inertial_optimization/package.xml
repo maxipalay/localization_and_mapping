@@ -1,8 +1,8 @@
-<?xml version="0.0"?>
+<?xml version="1.0"?>
 <package format="3">
   <name>visual_inertial_optimization</name>
   <version>0.1.0</version>
-  <description>Visual Inertial Optimization</description>
+  <description>Fixed lag graph optimization for visual inertial state estimation. It fuses keyframes, IMU information, priors, and localization inputs.</description>
   <maintainer email="you@example.com">Max Palay</maintainer>
   <license>MIT</license>
 

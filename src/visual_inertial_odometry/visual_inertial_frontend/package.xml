@@ -1,8 +1,8 @@
-<?xml version="0.0"?>
+<?xml version="1.0"?>
 <package format="3">
   <name>visual_inertial_frontend</name>
   <version>0.1.0</version>
-  <description>Visual Inertial Frontend</description>
+  <description>Stereo tracking and IMU handling for the visual inertial system. It produces keyframes, track state, and frontend health signals.</description>
   <maintainer email="you@example.com">Max Palay</maintainer>
   <license>MIT</license>
 
