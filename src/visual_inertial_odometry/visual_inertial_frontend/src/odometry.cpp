@@ -1,16 +1,3 @@
-// TODO:
-// instead of instantiating new vectors each time, use scratch buffer + clear()
-// tracks can agglomerate in certain regions, would be good to implement a strategy for topup that uses some sort of grid
-// do we want to keep tracks age? maybe the older a track is the more I can trust it?
-
-// special case to handle
-// First keyframe
-// There is no “previous keyframe time”:
-// publish KF with time_start = time_end and no IMU packet (or packet marked invalid)
-// backend uses priors to bootstrap, and the first IMU factor starts at KF0→KF1
-
-// double check time sources to use, if we grab from frames header or we use the stamp provided by the node
-
 #include "visual_inertial_frontend/odometry.hpp"
 
 #include <chrono>
