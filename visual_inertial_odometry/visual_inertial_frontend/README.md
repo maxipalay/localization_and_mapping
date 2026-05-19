@@ -5,7 +5,7 @@
 Stereo tracking and IMU processing library for the visual inertial stack.
 
 <p align="center">
-  <img src="./docs/Tracking Frontend.png" alt="visual_inertial_frontend overview" width="720" style="border-radius: 12px;" />
+  <img src="./docs/tracking_frontend.png" alt="visual_inertial_frontend overview" width="720" style="border-radius: 12px;" />
 </p>
 
 The goal of this package is to take in sensor inputs (rectified stereo images + IMU) and produce odometry estimates + keyframes (referred to as KFs).
@@ -45,17 +45,23 @@ vio.setCalibration(camera_rig); // set the camera + IMU rig calibration once
 vio.processImu(sample); // upon every new IMU sample, process it
 FrameResult result = vio.processStereo(left_gray, right_gray, stamp); // on every new frame pair, process them and get a motion estimate
 
+vio.tryFinalizeOne(); // periodically try to finalize the oldest pending keyframe
+
 KeyframeEvent keyframe;
 if (vio.tryPopFinalizedKeyframe(keyframe)) {
   // publish or forward to the backend
 }
 ```
 
-`processStereo(...)` returns a [`FrameResult`](include/visual_inertial_frontend/types.hpp) with the current local VO estimate, tracking state, and keyframe trigger decision. Finalized keyframes are produced asynchronously through the internal pending and ready queues and are retrieved with `tryPopFinalizedKeyframe(...)`.
+`processStereo(...)` returns a [`FrameResult`](include/visual_inertial_frontend/types.hpp) with the current local VO estimate, tracking state, and keyframe trigger decision. Finalized keyframes are produced through the internal pending and ready queues: `tryFinalizeOne()` advances the oldest pending interval when enough IMU coverage is available, and `tryPopFinalizedKeyframe(...)` retrieves completed keyframes from the ready queue.
 
 ## Processing flow
 
-At a high level, the package runs in two parallel streams of work.
+At a high level, the package has three related flows of work built around shared internal queues and buffers.
+
+<p align="center">
+  <img src="./docs/tracking_frontend_processing_flow.png" alt="visual_inertial_frontend processing flow" width="720" style="border-radius: 12px;" />
+</p>
 
 The first is frame rate visual processing:
 
@@ -68,15 +74,22 @@ The first is frame rate visual processing:
 7. The keyframe policy decides whether the current frame should become a keyframe.
 8. If triggered, a pending keyframe event is queued.
 
-The second is keyframe finalization:
+The second is IMU ingest:
 
-1. IMU samples are continuously fed through `processImu(...)` into the preintegrator buffer.
+1. `processImu(...)` appends each new IMU sample into the preintegrator buffer.
+2. The preintegrator drops out of order samples and trims old samples according to its buffer window.
+
+The third is keyframe finalization:
+
+1. `tryFinalizeOne()` inspects the oldest pending keyframe.
 2. A pending keyframe waits until there is enough IMU coverage for its interval.
-3. `tryFinalizeOne()` builds the preintegrated IMU packet for that interval.
+3. The finalization path reads from the preintegrator buffer and builds the preintegrated IMU packet for that interval.
 4. The completed `KeyframeEvent` is moved to the ready queue.
 5. The caller retrieves it with `tryPopFinalizedKeyframe(...)`.
 
-This split is why the per frame pose estimate and the finalized keyframe output are related but not identical concepts.
+This split is why the per frame pose estimate and the finalized keyframe output are related but not identical concepts. Stereo processing writes pending keyframes, IMU ingest fills the shared buffer, and finalization consumes both pieces later when the interval is ready.
+
+Edge cases such as first stereo frame, first keyframe, etc are important but left out of the diagram for clarity. Once this pipeline solidifies I'll consider making diagrams for those.
 
 ## Important data structures
 
