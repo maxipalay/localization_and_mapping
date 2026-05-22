@@ -57,32 +57,46 @@ localization.updateMapOdomEstimate(T_MO_backend); // feed back the backend estim
 
 ## Processing flow
 
-The package has three connected flows built around a shared observation buffer and a controller state machine.
+<p align="center">
+  <img src="./docs/localization_flow.png" alt="visual_inertial_localization processing flow" width="920" style="border-radius: 12px;" />
+</p>
 
-The first is tag map loading:
+The diagram above focuses on the runtime path. It shows the two main lanes in the module:
 
-1. `loadTagMap()` reads the configured YAML file.
-2. Valid tag entries are converted into fixed `map -> tag` transforms.
-3. Invalid or incomplete entries are skipped.
-4. The module stores the mapped tags for later lookup during detection ingest and correction estimation.
+- tag handling, which runs at detection rate
+- keyframe handling, which runs at keyframe rate
 
-The second is tag ingest and correction estimation:
+There are two extra pieces that matter but are not the main focus of the diagram:
+
+- `loadTagMap()` is a one-time setup step that reads the YAML map, parses valid tag entries, and stores fixed `map -> tag` transforms
+- `updateMapOdomEstimate(...)` feeds the latest backend `map -> odom` estimate back into the module so future localized decisions compare against the backend's current answer
+
+The runtime flow itself works like this.
+
+Tag handling:
 
 1. `ingestDetections(...)` receives a new AprilTag detection array.
-2. Each detection is checked against the mapped tag set, hamming threshold, decision margin threshold, TF lookup, range threshold, and oblique angle threshold.
-3. Accepted observations are appended to the recent observation buffer.
-4. The module drops old buffered observations according to the configured time window.
-5. Using the accepted detections and the current `odom -> body` TF, the module updates temporal correction hypotheses for `map -> odom`.
+2. Each detection is gated against the loaded tag map, hamming threshold, decision margin threshold, TF lookup, range threshold, and oblique angle threshold.
+3. For each accepted detection, the module resolves `body -> tag` from TF and turns that into an internal observation.
+4. Accepted observations are appended to the rolling buffer, and old observations are dropped based on the configured age limits.
+5. From the accepted observations in the current message, the module builds candidate `map -> odom` corrections.
+6. Those candidates are compared against each other and clustered by translation and rotation agreement.
+7. The dominant cluster is stored in the temporal correction history. That history is what later drives stable correction checks, bootstrap, and relocalization.
 
-The third is keyframe level decision making:
+Keyframe handling:
 
-1. `processKeyframe(...)` evaluates the current keyframe stamp and local `odom -> body` pose.
-2. If the module is still in `OdomOnly`, it looks for enough stable correction evidence to bootstrap into `Localized`.
-3. If the module is already `Localized`, it compares the current `map -> odom` estimate against stable and relocalization correction hypotheses.
-4. Depending on the disagreement and support, it either emits no action, pose priors, or a relocalization request.
-5. The caller later feeds the backend result back through `updateMapOdomEstimate(...)` so future decisions use the latest global alignment.
+1. `processKeyframe(...)` receives the keyframe stamp and the local `odom -> body` pose for that keyframe.
+2. The controller checks the current localization state.
+3. If the state is `OdomOnly`, the controller checks whether the stored correction history contains enough stable evidence to bootstrap.
+4. If there is enough evidence, the module switches to `Localized` and returns bootstrap related optimizer inputs, including pose overrides and localization priors.
+5. If there is not enough evidence yet, the module stays in `OdomOnly` and returns a decision that is still waiting for bootstrap.
+6. If the state is already `Localized`, the controller compares the current `map -> odom` estimate against the latest correction evidence from the tag side.
+7. If that disagreement is large enough, the module requests relocalization.
+8. If the disagreement is small but still meaningful, the module outputs pose priors.
+9. If the disagreement is inside the deadband, the module returns no action.
+10. All of those paths end by returning a `LocalizationDecision`.
 
-This split is why the package is not just a tag detector wrapper. Detection ingest builds correction evidence over time, while keyframe processing turns that evidence into optimizer inputs.
+This split is why the module is not just a tag detector wrapper. The detection side builds correction evidence over time, and the keyframe side turns that evidence into optimizer inputs.
 
 ## Important data structures
 
