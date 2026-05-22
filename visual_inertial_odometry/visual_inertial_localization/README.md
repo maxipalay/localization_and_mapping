@@ -4,9 +4,15 @@
 
 Tag based global correction library for the visual inertial stack.
 
+<p align="center">
+  <img src="./docs/localization_high_level.png" alt="visual_inertial_localization overview" width="720" style="border-radius: 12px;" />
+</p>
+
 The goal of this package is to provide global corrections from mapped features. In this implementation, those features are AprilTags. That cuts out a lot of the complexity of general feature matching against a map. The tradeoff is sparse corrections: no visible tag means no correction.
 
-It takes in mapped AprilTag detections and local keyframe pose context, then decides whether to stay on odometry, add global priors, bootstrap into localized mode, or relocalize when drift is too large.
+As the diagram shows, the module takes in a tag map, AprilTag detections, TF context for `tag -> body` and `odom -> body`, the keyframe stamp plus local `odom -> body` pose, and the latest backend `map -> odom` estimate.
+
+From those inputs it decides whether to stay on odometry, add global priors, bootstrap into localized mode, or relocalize when drift is too large. The main outside facing outputs are a `TagIngestReport` at tag message rate and a `LocalizationDecision` at keyframe rate.
 
 This package does not optimize a graph or publish ROS topics on its own. It filters tag observations, estimates stable `map -> odom` corrections, and turns those estimates into optimizer commands.
 
