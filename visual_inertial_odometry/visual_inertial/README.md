@@ -19,7 +19,7 @@ This package is what turns those libraries into a running ROS system.
 This package contains:
 
 - the main runtime nodes
-  - `tracking_node`
+  - `visual_inertial` (executable: `tracking_node`)
   - `localization_node`
   - `optimization_node`
 - helper visualization nodes
@@ -36,22 +36,30 @@ Two main runtime modes are supported.
 
 Mapping mode:
 
-- `tracking_node -> optimization_node`
+- `visual_inertial -> optimization_node`
 
 In this mode, the frontend publishes keyframes and the backend optimizes them without tag based global correction.
 
+<p align="center">
+  <img src="./docs/rosgraph_mapping.png" alt="visual_inertial mapping mode ROS graph" width="920" style="border-radius: 12px;" />
+</p>
+
 Localization mode:
 
-- `tracking_node -> localization_node -> optimization_node`
+- `visual_inertial -> localization_node -> optimization_node`
 - `optimization_node -> localization_node` feedback
 
 In this mode, the localization node watches tag detections and keyframes, sends localization commands to the optimizer, and receives backend `map -> odom` feedback back from the optimizer.
 
+<p align="center">
+  <img src="./docs/rosgraph_localization.png" alt="visual_inertial localization mode ROS graph" width="920" style="border-radius: 12px;" />
+</p>
+
 ## Main nodes
 
-### `tracking_node`
+### `visual_inertial` (`tracking_node`)
 
-`tracking_node` wraps [`visual_inertial_frontend`](../visual_inertial_frontend).
+The `visual_inertial` node wraps [`visual_inertial_frontend`](../visual_inertial_frontend).
 
 It mainly:
 
@@ -148,5 +156,3 @@ Run them with:
 colcon test --base-paths . --packages-select visual_inertial --event-handlers console_direct+
 colcon test-result --verbose --test-result-base build/visual_inertial
 ```
-
-
