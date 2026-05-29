@@ -1,0 +1,181 @@
+visual_inertial:
+  ros__parameters:
+    # Keep the estimator/body state in the non-optical IMU frame.
+    # Publish odom TF on camera0_link so the RealSense static TF tree remains connected.
+    parent_frame_id: odom
+    child_frame_id: camera0_link
+    body_frame_id: camera0_imu_frame
+
+    # Resolve body<-camera from RealSense TF at runtime.
+    T_BC_translation: [0.0, 0.0, 0.0]
+    T_BC_quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+    auto_resolve_t_bc_from_tf: true
+
+    # Match nvblox vslam camera wiring (splitter outputs IR-off frames).
+    input_topic_left: /camera0/realsense_splitter_node/output/infra_1
+    input_topic_right: /camera0/realsense_splitter_node/output/infra_2
+    input_topic_imu: /camera0/imu
+    left/camera_info: /camera0/infra1/camera_info
+    right/camera_info: /camera0/infra2/camera_info
+
+    tracks_topic: /tracks
+    frontend_health_topic: /frontend_health
+    transport: raw
+    queue_size: 3
+    stereo_slop_s: 0.01
+    age_penalty: 0.0
+
+    # VisualInertial core
+    target_features: 350
+    stereo_epi_eps_y: 1.5
+    stereo_disp_min: 3.0
+    stereo_disp_max: 255.0
+    fb_thr2: 2.25
+    degraded_min_tracks: 80
+    degraded_min_track_retention: 0.6
+
+    kf_ready_queue_max: 30
+    kf_pending_queue_max: 30
+
+    # Track top-up / spatial distribution
+    mask_scale: 20
+    topup_grid_scale: 24
+    max_total_tracks: 400
+    topup_burst_factor: 2.0
+    topup_detect_factor: 3.0
+
+    # PnP tuning
+    pnp_iterations_count: 100
+    pnp_reproj_error_px: 2.0
+    pnp_confidence: 0.999
+    pnp_refine_max_iters: 30
+    pnp_refine_eps: 1e-6
+
+    # Keyframe policy
+    kf_min_dt_s: 0.2
+    kf_max_dt_s: 1.00
+    kf_min_trans_m: 0.1
+    kf_min_rot_deg: 10.0
+    kf_min_tracks: 120
+    kf_min_pnp_tracks: 100
+    kf_min_shared_tracks: 90
+    kf_min_shared_ratio: 0.25
+    kf_force_on_max_interval: true
+    kf_allow_early_on_quality_drop: false
+
+    # IMU preintegration
+    imu_gyro_noise_density: 0.01
+    imu_accel_noise_density: 0.10
+    imu_gyro_bias_rw: 0.001
+    imu_accel_bias_rw: 0.01
+    imu_gravity_mps2: 9.81
+    imu_max_buffer_s: 5.0
+    imu_keep_anchor: true
+
+visual_inertial_optimization:
+  ros__parameters:
+    operation_mode: mapping
+
+    T_BC_translation: [0.0, 0.0, 0.0]
+    T_BC_quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+    body_frame_id: camera0_imu_frame
+    auto_resolve_t_bc_from_tf: true
+
+    # topics / frames
+    keyframe_topic: keyframes
+    left_info_topic: /camera0/infra1/camera_info
+    right_info_topic: /camera0/infra2/camera_info
+    map_frame_id: map
+    odom_frame_id: odom
+
+    tf_pub_rate_hz: 30.0
+
+    # Backend config
+    window_size: 15
+    stereo_sigma_px: 0.6
+    stereo_huber_k: 1.345
+    prior_rot_sigma_rad: 0.05
+    prior_trans_sigma_m: 0.05
+    vel_prior_sigma: 0.1
+    bias_acc_prior_sigma: 0.5
+    bias_gyro_prior_sigma: 0.1
+
+    use_vo_between: true
+    between_rot_sigma_rad: 0.2
+    between_trans_sigma_m: 0.1
+    between_huber_k: 1.345
+    use_interval_health_for_vo_between: true
+    between_health_min_pose_valid_fraction: 0.6
+    between_health_min_track_retention: 0.6
+    between_health_min_pnp_inlier_ratio: 0.25
+    between_health_min_track_coverage: 0.2
+    between_health_max_pnp_reproj_rmse_px: 3.0
+    between_health_max_sigma_scale: 5.0
+    between_health_skip_quality: 0.4
+    use_imu: true
+
+    init_landmarks_from_stereo: true
+    prune_unobserved_landmarks: true
+    max_keyframe_queue: 30
+
+    publish_optimization_result: true
+    optimization_result_topic: optimization_result
+
+    publish_optimized_landmarks: false
+    landmark_topic: optimized_landmarks
+
+    lm_fetch_max: 0
+    localization_command_topic: localization_command
+    localization_feedback_topic: localization_feedback
+    localization_command_wait_ms: 50.0
+
+visual_inertial_localization:
+  ros__parameters:
+    keyframe_topic: keyframes
+    body_frame_id: camera0_imu_frame
+    odom_frame_id: odom
+    localization_command_topic: localization_command
+    localization_feedback_topic: localization_feedback
+
+    # Localization mode inputs and tuning
+    localization_tag_map_path: "/tmp/online_mapping_sessions/session_20260423_212723/offline_global_graph/optimized_tags.yaml"
+    tag_topic: detections
+    tag_tf_lookup_timeout_ms: 50.0
+    localization_tag_max_age_s: 0.5
+    tag_buffer_age_s: 2.0
+    max_tag_hamming: 0
+    min_tag_decision_margin: 40.0
+    max_tag_range_m: 3.0
+    max_tag_oblique_angle_deg: 40.0
+    localization_pose_prior_rot_sigma_rad: 0.35
+    localization_pose_prior_trans_sigma_m: 0.10
+    localization_pose_prior_huber_k: 1.0
+    localization_cluster_translation_m: 0.75
+    localization_cluster_rotation_deg: 20.0
+    localization_stable_hypothesis_age_s: 1.0
+    localization_stable_min_frames: 3
+    localization_relocalization_min_history_frames: 5
+    localization_stable_translation_m: 0.25
+    localization_stable_rotation_deg: 8.0
+    localization_relocalize_translation_m: 0.25
+    localization_relocalize_rotation_deg: 8.0
+    localization_tracking_deadband_translation_m: 0.05
+    localization_tracking_deadband_rotation_deg: 2.0
+    tag_frame_ids: [1]
+    tag_frame_names: ["base"]
+
+tracks_viz_node:
+  ros__parameters:
+    image_topic: /camera0/realsense_splitter_node/output/infra_1
+    image_transport_in: raw
+    tracks_topic: /tracks
+    output_topic: /tracks_overlay
+    sync_tolerance_ms: 10.0
+
+body_path_node:
+  ros__parameters:
+    fixed_frame: map
+    body_frame: camera0_imu_frame
+    topic: /body_path
+    publish_hz: 10.0
+    history_sec: 20.0

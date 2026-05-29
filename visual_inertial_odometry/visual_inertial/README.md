@@ -41,7 +41,7 @@ Mapping mode:
 In this mode, the frontend publishes keyframes and the backend optimizes them without tag based global correction.
 
 <p align="center">
-  <img src="./docs/rosgraph_mapping.png" alt="visual_inertial mapping mode ROS graph" width="920" style="border-radius: 12px;" />
+  <img src="../visual_inertial_bringup/docs/rosgraph_mapping.png" alt="visual_inertial mapping mode ROS graph" width="920" style="border-radius: 12px;" />
 </p>
 
 Localization mode:
@@ -55,7 +55,7 @@ Localization mode:
 In this mode, the localization node watches tag detections and keyframes, sends localization commands to the optimizer, and receives backend `map -> odom` feedback back from the optimizer.
 
 <p align="center">
-  <img src="./docs/rosgraph_localization.png" alt="visual_inertial localization mode ROS graph" width="920" style="border-radius: 12px;" />
+  <img src="../visual_inertial_bringup/docs/rosgraph_localization.png" alt="visual_inertial localization mode ROS graph" width="920" style="border-radius: 12px;" />
 </p>
 
 ## Main nodes
