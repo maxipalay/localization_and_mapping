@@ -1,58 +1,136 @@
-# TODO
+# visual_inertial_odometry
 
-- expose parameters on a single unified params file
-- work on estimating camera<->IMU offset
-- filter-based fast prediction
+`visual_inertial_odometry` is the online state estimation stack used in this repo.
 
-## Feature tracking and distribution
-- Grid-based / cell-balanced top-up (prefer empty regions, newly visible FOV areas). You tried it; a bit slower; stashed as a potential upgrade.
+At a high level, it takes stereo images and IMU data, tracks motion locally, optionally uses AprilTags to tie that motion back to a map, and runs a fixed-lag backend to keep the state estimate consistent over time.
 
-- Track age / score / stability: prefer older tracks for PnP and keyframe overlap; drop flaky tracks sooner.
+This directory holds the main estimator packages:
 
-- Adaptive feature budget: target more features in low texture, fewer in high texture (keeps compute stable).
+- [`visual_inertial_frontend`](visual_inertial_frontend)
+  - stereo tracking
+  - IMU ingest and preintegration
+  - keyframe generation
+  - frontend health
+- [`visual_inertial_localization`](visual_inertial_localization)
+  - AprilTag-based global correction logic
+  - bootstrap and relocalization decisions
+  - pose priors and overrides for the backend
+- [`visual_inertial_optimization`](visual_inertial_optimization)
+  - fixed-lag backend optimization
+  - landmark management
+  - optimized pose, velocity, and bias estimates
+- [`visual_inertial_common`](visual_inertial_common)
+  - shared types passed across the stack
+- [`visual_inertial`](visual_inertial)
+  - ROS nodes
+  - ROS messages
+  - transport code between ROS and the C++ libraries
+- [`visual_inertial_bringup`](visual_inertial_bringup)
+  - launch files
+  - default runtime YAML
+  - launch tests
 
+## Stack components
 
-## Gating and measurement quality
+The code is split by responsibility.
 
-- Better PnP health metrics: compute and log reprojection RMSE, inlier ratio, and failure reasons.
+The frontend owns frame-rate work:
 
-- Make PnP more deterministic: refine only when inliers are strong; adapt RANSAC iterations.
+- track features
+- estimate local motion
+- decide when to make a keyframe
+- package the data the backend needs
 
+The localization package owns map-based correction:
 
-## Keyframes and frontend policy
+- ingest tag detections
+- decide when there is enough evidence to bootstrap or relocalize
+- hand the backend soft priors or hard overrides
 
-- Keyframe policy tuned for parallax, not just time: avoid KF spam when stationary.
+The optimization package owns the backend state:
 
-- Better chaining when KFs drop: tolerate gaps or enforce strictness + auto-reset.
+- poses
+- velocities
+- IMU biases
+- active landmarks
 
-## Backend optimization
+The ROS package wraps those libraries as nodes. The bringup package wires them into a running system for this repo.
 
-- Robust noise models (Huber/Cauchy on stereo factors) and/or tune noise params.
+## Runtime at a glance
 
-- Residual-based pruning/downweighting of bad landmark observations.
+The main runtime path is:
 
-## Landmark lifecycle rules:
+- stereo images and IMU go into `visual_inertial`
+- `visual_inertial` publishes keyframes
+- `visual_inertial_optimization` consumes those keyframes and updates the backend state
+- `visual_inertial_optimization` feeds bias estimates back to `visual_inertial`
 
-- don’t trust/init until seen in multiple KFs (or sufficient parallax)
+In localization mode there is one more loop:
 
-- Window tuning (KF count, lag) vs compute.
+- `visual_inertial_localization` watches keyframes and tag detections
+- it sends localization commands to `visual_inertial_optimization`
+- the optimizer sends localization feedback back
 
-## IMU / timing robustness
+Bringup for this stack lives in [`visual_inertial_bringup`](visual_inertial_bringup). Sensor-specific camera glue lives outside this directory under [`../sensor_utils`](../sensor_utils).
 
-- Clean up camera–IMU time offset estimation (remove “coverage margin” hacks).
+## Where to start
 
-- Optional gyro-only prediction as a PnP initial guess / degraded mode (low effort, moderate benefit).
+If you just want to understand the stack, read in this order:
 
-## Reliability, recovery, diagnostics
+1. [`visual_inertial_bringup/README.md`](visual_inertial_bringup/README.md)
+2. [`visual_inertial/README.md`](visual_inertial/README.md)
+3. the package README for the part you care about
+   - [`visual_inertial_frontend/README.md`](visual_inertial_frontend/README.md)
+   - [`visual_inertial_localization/README.md`](visual_inertial_localization/README.md)
+   - [`visual_inertial_optimization/README.md`](visual_inertial_optimization/README.md)
+   - [`visual_inertial_common/README.md`](visual_inertial_common/README.md)
 
-- Degraded mode: when tracking/PnP is bad, stop updating pose, keep tracking, or reset gracefully.
+If you want the camera side too, read:
 
-- Backend exception recovery: catch smoother failures, reset window, continue from last good.
+- [`../sensor_utils/realsense_utils/README.md`](../sensor_utils/realsense_utils/README.md)
 
-- Publish a “health” topic:
+## Tests
 
-    - tracks alive, stereo-valid count, pnp inliers, rmse
+Coverage is split across the packages:
 
-## Visualization and debugging
+- `visual_inertial_frontend`
+  - unit tests for keyframe policy, track buffering, and IMU preintegration
+- `visual_inertial_localization`
+  - unit tests for tag ingest, stability checks, and controller decisions
+- `visual_inertial_optimization`
+  - unit tests for backend initialization and health-based gating
+- `visual_inertial_bringup`
+  - launch tests for mapping mode and localization mode node graph wiring
 
-- Other useful vizualization tools
+Run the main subsystem test pass with:
+
+```bash
+colcon test --base-paths . --packages-select \
+  visual_inertial \
+  visual_inertial_bringup \
+  visual_inertial_common \
+  visual_inertial_frontend \
+  visual_inertial_localization \
+  visual_inertial_optimization \
+  --event-handlers console_direct+
+```
+
+Then inspect results with:
+
+```bash
+colcon test-result --verbose
+```
+
+## Related parts of the repo
+
+This stack is not the whole repo.
+
+Other nearby pieces are:
+
+- [`../sensor_utils`](../sensor_utils)
+  - camera-specific runtime code
+- [`../mapping_tools`](../mapping_tools)
+  - session logging
+  - offline graph work
+  - dense fusion
+  - visualization tools
