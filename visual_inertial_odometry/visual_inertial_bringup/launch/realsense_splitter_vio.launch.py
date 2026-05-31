@@ -32,6 +32,9 @@ def generate_launch_description():
     operation_mode = LaunchConfiguration("operation_mode")
     localization_tag_map_path = LaunchConfiguration("localization_tag_map_path")
     tag_topic = LaunchConfiguration("tag_topic")
+    infra_enable_auto_exposure = LaunchConfiguration("infra_enable_auto_exposure")
+    infra_exposure = LaunchConfiguration("infra_exposure")
+    infra_gain = LaunchConfiguration("infra_gain")
 
     def maybe_launch_mapping_logger(context):
         if operation_mode.perform(context) != "mapping":
@@ -96,6 +99,9 @@ def generate_launch_description():
             "camera_serial_numbers": camera_serial_numbers,
             "auto_retoggle_emitter_on_off": "True",
             "emitter_retoggle_delay_sec": "5.0",
+            "infra_enable_auto_exposure": infra_enable_auto_exposure,
+            "infra_exposure": infra_exposure,
+            "infra_gain": infra_gain,
         }.items(),
         condition=IfCondition(launch_realsense),
     )
@@ -163,6 +169,9 @@ def generate_launch_description():
             DeclareLaunchArgument("logger_params_file", default_value=""),
             DeclareLaunchArgument("localization_tag_map_path", default_value=""),
             DeclareLaunchArgument("tag_topic", default_value=""),
+            DeclareLaunchArgument("infra_enable_auto_exposure", default_value="true"),
+            DeclareLaunchArgument("infra_exposure", default_value=""),
+            DeclareLaunchArgument("infra_gain", default_value=""),
             DeclareLaunchArgument("operation_mode", default_value="mapping"),
             realsense_launch,
             launch_vio_nodes,

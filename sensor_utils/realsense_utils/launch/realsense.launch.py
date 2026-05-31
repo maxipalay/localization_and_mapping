@@ -138,6 +138,11 @@ def _add_cameras(context):
     )
     infra_gain_map_path = LaunchConfiguration('infra_gain_map_path')
     resize_gain_map_to_image = LaunchConfiguration('resize_gain_map_to_image')
+    infra_enable_auto_exposure = (
+        LaunchConfiguration('infra_enable_auto_exposure').perform(context).lower() == 'true'
+    )
+    infra_exposure = LaunchConfiguration('infra_exposure').perform(context)
+    infra_gain = LaunchConfiguration('infra_gain').perform(context)
     num_cameras = int(LaunchConfiguration('num_cameras').perform(context))
     run_standalone = LaunchConfiguration('run_standalone').perform(context).lower() == 'true'
     auto_retoggle_emitter = (
@@ -227,26 +232,28 @@ def _add_cameras(context):
                 _delayed_param_set_action(
                     camera_name=camera_name,
                     param_name='depth_module.enable_auto_exposure',
-                    value='false',
+                    value='true' if infra_enable_auto_exposure else 'false',
                     period=idx * 10.0 + emitter_retoggle_delay_sec + 1.0,
                 )
             )
-            actions.append(
-                _delayed_param_set_action(
-                    camera_name=camera_name,
-                    param_name='depth_module.exposure',
-                    value='12000',
-                    period=idx * 10.0 + emitter_retoggle_delay_sec + 2.0,
+            if not infra_enable_auto_exposure and infra_exposure:
+                actions.append(
+                    _delayed_param_set_action(
+                        camera_name=camera_name,
+                        param_name='depth_module.exposure',
+                        value=infra_exposure,
+                        period=idx * 10.0 + emitter_retoggle_delay_sec + 2.0,
+                    )
                 )
-            )
-            actions.append(
-                _delayed_param_set_action(
-                    camera_name=camera_name,
-                    param_name='depth_module.gain',
-                    value='60',
-                    period=idx * 10.0 + emitter_retoggle_delay_sec + 3.0,
+            if not infra_enable_auto_exposure and infra_gain:
+                actions.append(
+                    _delayed_param_set_action(
+                        camera_name=camera_name,
+                        param_name='depth_module.gain',
+                        value=infra_gain,
+                        period=idx * 10.0 + emitter_retoggle_delay_sec + 3.0,
+                    )
                 )
-            )
             actions.append(
                 _delayed_param_set_action(
                     camera_name=camera_name,
@@ -271,6 +278,9 @@ def generate_launch_description():
         DeclareLaunchArgument('auto_retoggle_emitter_on_off', default_value='False'),
         DeclareLaunchArgument('emitter_retoggle_delay_sec', default_value='5.0'),
         DeclareLaunchArgument('enable_infra_gain_correction', default_value='True'),
+        DeclareLaunchArgument('infra_enable_auto_exposure', default_value='true'),
+        DeclareLaunchArgument('infra_exposure', default_value=''),
+        DeclareLaunchArgument('infra_gain', default_value=''),
         DeclareLaunchArgument(
             'infra_gain_map_path',
             default_value='/tmp/radial_vignette_map_20260411_201754.npy',
