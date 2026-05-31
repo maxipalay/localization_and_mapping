@@ -31,6 +31,7 @@ def generate_launch_description():
     logger_params_file = LaunchConfiguration("logger_params_file")
     operation_mode = LaunchConfiguration("operation_mode")
     localization_tag_map_path = LaunchConfiguration("localization_tag_map_path")
+    tag_topic = LaunchConfiguration("tag_topic")
 
     def maybe_launch_mapping_logger(context):
         if operation_mode.perform(context) != "mapping":
@@ -65,6 +66,13 @@ def generate_launch_description():
             localization_params.append(
                 {
                     "localization_tag_map_path": ParameterValue(tag_map_path, value_type=str),
+                }
+            )
+        tag_topic_value = tag_topic.perform(context)
+        if tag_topic_value:
+            localization_params.append(
+                {
+                    "tag_topic": ParameterValue(tag_topic_value, value_type=str),
                 }
             )
 
@@ -154,6 +162,7 @@ def generate_launch_description():
             DeclareLaunchArgument("params_file", default_value=default_vio_params),
             DeclareLaunchArgument("logger_params_file", default_value=""),
             DeclareLaunchArgument("localization_tag_map_path", default_value=""),
+            DeclareLaunchArgument("tag_topic", default_value=""),
             DeclareLaunchArgument("operation_mode", default_value="mapping"),
             realsense_launch,
             launch_vio_nodes,
