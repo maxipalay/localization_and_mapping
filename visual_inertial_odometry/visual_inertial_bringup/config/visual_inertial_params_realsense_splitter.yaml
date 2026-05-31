@@ -138,7 +138,7 @@ visual_inertial_localization:
     localization_feedback_topic: localization_feedback
 
     # Localization mode inputs and tuning
-    localization_tag_map_path: "/tmp/online_mapping_sessions/session_20260423_212723/offline_global_graph/optimized_tags.yaml"
+    localization_tag_map_path: ""
     tag_topic: detections
     tag_tf_lookup_timeout_ms: 50.0
     localization_tag_max_age_s: 0.5

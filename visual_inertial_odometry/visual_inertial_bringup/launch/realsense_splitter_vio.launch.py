@@ -5,7 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -30,6 +30,7 @@ def generate_launch_description():
     params_file = LaunchConfiguration("params_file")
     logger_params_file = LaunchConfiguration("logger_params_file")
     operation_mode = LaunchConfiguration("operation_mode")
+    localization_tag_map_path = LaunchConfiguration("localization_tag_map_path")
 
     def maybe_launch_mapping_logger(context):
         if operation_mode.perform(context) != "mapping":
@@ -51,6 +52,29 @@ def generate_launch_description():
                 name="online_mapping_logger",
                 output="screen",
                 parameters=[params_path],
+            )
+        ]
+
+    def maybe_launch_localization_node(context):
+        if operation_mode.perform(context) != "localization":
+            return []
+
+        localization_params = [params_file]
+        tag_map_path = localization_tag_map_path.perform(context)
+        if tag_map_path:
+            localization_params.append(
+                {
+                    "localization_tag_map_path": ParameterValue(tag_map_path, value_type=str),
+                }
+            )
+
+        return [
+            Node(
+                package="visual_inertial",
+                executable="localization_node",
+                name="visual_inertial_localization",
+                output="screen",
+                parameters=localization_params,
             )
         ]
 
@@ -89,15 +113,6 @@ def generate_launch_description():
         ],
     )
 
-    localization_node = Node(
-        package="visual_inertial",
-        executable="localization_node",
-        name="visual_inertial_localization",
-        output="screen",
-        parameters=[params_file],
-        condition=IfCondition(PythonExpression(["'", operation_mode, "' == 'localization'"])),
-    )
-
     tracks_viz_node = Node(
         package="visual_inertial",
         executable="tracks_viz_node",
@@ -122,7 +137,7 @@ def generate_launch_description():
             tracking_node,
             tracks_viz_node,
             path_viz_node,
-            localization_node,
+            OpaqueFunction(function=maybe_launch_localization_node),
             optimization_node,
             OpaqueFunction(function=maybe_launch_mapping_logger),
         ],
@@ -138,6 +153,7 @@ def generate_launch_description():
             DeclareLaunchArgument("launch_mapping_logger", default_value="true"),
             DeclareLaunchArgument("params_file", default_value=default_vio_params),
             DeclareLaunchArgument("logger_params_file", default_value=""),
+            DeclareLaunchArgument("localization_tag_map_path", default_value=""),
             DeclareLaunchArgument("operation_mode", default_value="mapping"),
             realsense_launch,
             launch_vio_nodes,
