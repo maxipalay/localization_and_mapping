@@ -17,7 +17,6 @@ find_package(visual_inertial_optimization REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
-find_package(TBB REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -83,7 +82,6 @@ target_link_libraries(optimization_node
   visual_inertial_optimization::visual_inertial_optimization
   visual_inertial_common::visual_inertial_common
   visual_inertial_transport
-  TBB::tbb
 )
 
 target_link_libraries(localization_node
