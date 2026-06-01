@@ -32,9 +32,12 @@ def generate_launch_description():
     operation_mode = LaunchConfiguration("operation_mode")
     localization_tag_map_path = LaunchConfiguration("localization_tag_map_path")
     tag_topic = LaunchConfiguration("tag_topic")
+    enable_infra_gain_correction = LaunchConfiguration("enable_infra_gain_correction")
     infra_enable_auto_exposure = LaunchConfiguration("infra_enable_auto_exposure")
     infra_exposure = LaunchConfiguration("infra_exposure")
     infra_gain = LaunchConfiguration("infra_gain")
+    publish_optimized_landmarks = LaunchConfiguration("publish_optimized_landmarks")
+    lm_fetch_max = LaunchConfiguration("lm_fetch_max")
 
     def maybe_launch_mapping_logger(context):
         if operation_mode.perform(context) != "mapping":
@@ -89,6 +92,40 @@ def generate_launch_description():
             )
         ]
 
+    def maybe_launch_optimization_node(context):
+        optimization_params = [
+            params_file,
+            {
+                "operation_mode": ParameterValue(operation_mode, value_type=str),
+            },
+        ]
+
+        publish_landmarks_value = publish_optimized_landmarks.perform(context)
+        if publish_landmarks_value:
+            optimization_params.append(
+                {
+                    "publish_optimized_landmarks": publish_landmarks_value.lower() == "true",
+                }
+            )
+
+        lm_fetch_max_value = lm_fetch_max.perform(context)
+        if lm_fetch_max_value:
+            optimization_params.append(
+                {
+                    "lm_fetch_max": int(lm_fetch_max_value),
+                }
+            )
+
+        return [
+            Node(
+                package="visual_inertial",
+                executable="optimization_node",
+                name="visual_inertial_optimization",
+                output="screen",
+                parameters=optimization_params,
+            )
+        ]
+
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(realsense_launch_file),
         launch_arguments={
@@ -99,6 +136,7 @@ def generate_launch_description():
             "camera_serial_numbers": camera_serial_numbers,
             "auto_retoggle_emitter_on_off": "True",
             "emitter_retoggle_delay_sec": "5.0",
+            "enable_infra_gain_correction": enable_infra_gain_correction,
             "infra_enable_auto_exposure": infra_enable_auto_exposure,
             "infra_exposure": infra_exposure,
             "infra_gain": infra_gain,
@@ -112,19 +150,6 @@ def generate_launch_description():
         name="visual_inertial",
         output="screen",
         parameters=[params_file],
-    )
-
-    optimization_node = Node(
-        package="visual_inertial",
-        executable="optimization_node",
-        name="visual_inertial_optimization",
-        output="screen",
-        parameters=[
-            params_file,
-            {
-                "operation_mode": ParameterValue(operation_mode, value_type=str),
-            },
-        ],
     )
 
     tracks_viz_node = Node(
@@ -152,7 +177,7 @@ def generate_launch_description():
             tracks_viz_node,
             path_viz_node,
             OpaqueFunction(function=maybe_launch_localization_node),
-            optimization_node,
+            OpaqueFunction(function=maybe_launch_optimization_node),
             OpaqueFunction(function=maybe_launch_mapping_logger),
         ],
     )
@@ -169,9 +194,12 @@ def generate_launch_description():
             DeclareLaunchArgument("logger_params_file", default_value=""),
             DeclareLaunchArgument("localization_tag_map_path", default_value=""),
             DeclareLaunchArgument("tag_topic", default_value=""),
-            DeclareLaunchArgument("infra_enable_auto_exposure", default_value="true"),
-            DeclareLaunchArgument("infra_exposure", default_value=""),
-            DeclareLaunchArgument("infra_gain", default_value=""),
+            DeclareLaunchArgument("enable_infra_gain_correction", default_value="false"),
+            DeclareLaunchArgument("infra_enable_auto_exposure", default_value="false"),
+            DeclareLaunchArgument("infra_exposure", default_value="12000"),
+            DeclareLaunchArgument("infra_gain", default_value="90"),
+            DeclareLaunchArgument("publish_optimized_landmarks", default_value=""),
+            DeclareLaunchArgument("lm_fetch_max", default_value=""),
             DeclareLaunchArgument("operation_mode", default_value="mapping"),
             realsense_launch,
             launch_vio_nodes,

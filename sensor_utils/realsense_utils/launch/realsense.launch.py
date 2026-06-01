@@ -260,8 +260,8 @@ def _add_cameras(context):
                     param_name='depth_module.emitter_on_off',
                     value='true',
                     period=idx * 10.0 + emitter_retoggle_delay_sec + 4.0,
+                    )
                 )
-            )
     return actions
 
 
@@ -277,13 +277,13 @@ def generate_launch_description():
         DeclareLaunchArgument('intra_process_comms', default_value='True'),
         DeclareLaunchArgument('auto_retoggle_emitter_on_off', default_value='False'),
         DeclareLaunchArgument('emitter_retoggle_delay_sec', default_value='5.0'),
-        DeclareLaunchArgument('enable_infra_gain_correction', default_value='True'),
-        DeclareLaunchArgument('infra_enable_auto_exposure', default_value='true'),
-        DeclareLaunchArgument('infra_exposure', default_value=''),
-        DeclareLaunchArgument('infra_gain', default_value=''),
+        DeclareLaunchArgument('enable_infra_gain_correction', default_value='False'),
+        DeclareLaunchArgument('infra_enable_auto_exposure', default_value='false'),
+        DeclareLaunchArgument('infra_exposure', default_value='12000'),
+        DeclareLaunchArgument('infra_gain', default_value='90'),
         DeclareLaunchArgument(
             'infra_gain_map_path',
-            default_value='/tmp/radial_vignette_map_20260411_201754.npy',
+            default_value='',
         ),
         DeclareLaunchArgument('resize_gain_map_to_image', default_value='True'),
         ComposableNodeContainer(
