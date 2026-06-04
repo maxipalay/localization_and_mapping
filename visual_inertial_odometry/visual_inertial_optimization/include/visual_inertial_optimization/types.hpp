@@ -10,6 +10,7 @@
 struct OptimizationStats {
   // Window bookkeeping (requested window size, not necessarily exact internal marginal set)
   int num_keyframes_in_window = 0;
+  int num_queued_keyframes = 0;
 
   // Landmark / factor counts for the *latest update() call*
   int num_landmarks_alive = 0;

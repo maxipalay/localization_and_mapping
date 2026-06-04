@@ -103,6 +103,7 @@ visual_inertial::msg::OptimizationResult makeOptimizationResultMsg(
     }
 
     out.stats.num_keyframes_in_window = result.stats.num_keyframes_in_window;
+    out.stats.num_queued_keyframes = result.stats.num_queued_keyframes;
     out.stats.num_landmarks_alive = result.stats.num_landmarks_alive;
     out.stats.num_landmarks_created = result.stats.num_landmarks_created;
     out.stats.num_stereo_factors_added = result.stats.num_stereo_factors_added;

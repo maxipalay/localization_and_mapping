@@ -280,11 +280,12 @@ private:
         RCLCPP_INFO(
             get_logger(),
             "Optimization update kf_id=%lu took %.1f ms "
-            "(window=%d stereo=%d imu=%d between=%d prior=%d "
+            "(window=%d queued=%d stereo=%d imu=%d between=%d prior=%d "
             "vo_meas=%d vo_used=%d vo_skip=%d vo_q=%.3f vo_sigma=%.3f imu_only=%d)",
             static_cast<unsigned long>(result.kf_id),
             optimize_ms,
             result.stats.num_keyframes_in_window,
+            result.stats.num_queued_keyframes,
             result.stats.num_stereo_factors_added,
             result.stats.num_imu_factors_added,
             result.stats.num_between_factors_added,
@@ -295,6 +296,12 @@ private:
             result.stats.vo_between_quality,
             result.stats.vo_between_sigma_scale,
             result.stats.imu_only_update ? 1 : 0);
+    }
+
+    int queuedKeyframeCount_()
+    {
+        std::lock_guard<std::mutex> lk(q_mtx_);
+        return static_cast<int>(kf_q_.size());
     }
 
     void publishImuBias_(
@@ -680,7 +687,7 @@ private:
             applyLocalizationDecision_(update, *optimization_);
 
             const auto optimize_start = std::chrono::steady_clock::now();
-            const auto res = optimization_->push(
+            auto res = optimization_->push(
                 update.event,
                 update.between_meas,
                 update.absolute_pose_priors,
@@ -691,6 +698,8 @@ private:
                 std::chrono::duration<double, std::milli>(optimize_end - optimize_start).count();
             if (!res)
                 continue;
+
+            res->stats.num_queued_keyframes = queuedKeyframeCount_();
 
             handleOptimizationResult_(msg, *res, *optimization_, optimize_ms);
         }

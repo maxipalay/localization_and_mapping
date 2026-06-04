@@ -1,5 +1,6 @@
 # Counts and summary values from the latest optimizer update.
 int32 num_keyframes_in_window
+int32 num_queued_keyframes
 int32 num_landmarks_alive
 int32 num_landmarks_created
 int32 num_stereo_factors_added

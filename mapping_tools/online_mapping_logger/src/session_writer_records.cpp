@@ -137,6 +137,7 @@ std::filesystem::path SessionWriter::writeKeyframeMetadata_(
   detail::writeVector3Yaml(os, "  gyro_bias", pending.opt_result.gyro_bias);
   os << "  stats:\n";
   os << "    num_keyframes_in_window: " << pending.opt_result.stats.num_keyframes_in_window << "\n";
+  os << "    num_queued_keyframes: " << pending.opt_result.stats.num_queued_keyframes << "\n";
   os << "    num_landmarks_alive: " << pending.opt_result.stats.num_landmarks_alive << "\n";
   os << "    num_landmarks_created: " << pending.opt_result.stats.num_landmarks_created << "\n";
   os << "    num_stereo_factors_added: " << pending.opt_result.stats.num_stereo_factors_added << "\n";
