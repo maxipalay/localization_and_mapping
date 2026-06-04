@@ -116,6 +116,20 @@ TEST(OptimizationModuleTest, SkipsStereoWhenIntervalHealthHasNoPoseSupport)
     EXPECT_FALSE(result->stats.had_vo_between_measurement);
 }
 
+TEST(OptimizationModuleTest, SkipsNewLandmarkStereoFactorWhenDisparityIsDegenerate)
+{
+    OptimizationModule module(makeBaseConfig());
+
+    ASSERT_TRUE(module.initializeRig(makeValidRig()));
+
+    const auto result = module.push(makeStereoKeyframe(1, goodIntervalHealth(), 0.0F));
+
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->stats.num_stereo_factors_added, 0);
+    EXPECT_EQ(result->stats.num_landmarks_created, 0);
+    EXPECT_EQ(result->stats.num_prior_factors_added, 3);
+}
+
 TEST(OptimizationModuleTest, SkipsVoBetweenOnPoorIntervalHealthButKeepsStereo)
 {
     auto config = makeBaseConfig();

@@ -467,21 +467,37 @@ std::optional<OptimizationResult> Optimizer::push(
       const double uR = static_cast<double>(kf.pr[i].x);
 
       const gtsam::StereoPoint2 z(uL, uR, v);
+      if (new_landmark)
+      {
+        if (!cfg_.init_landmarks_from_stereo)
+        {
+          continue;
+        }
+
+        const double disp = uL - uR;
+        if (disp <= 1e-6)
+        {
+          continue;
+        }
+
+        const Eigen::Vector3d pC = triangulateStereoInLeftCam_(uL, uR, v, fx, fy, cx, cy, b);
+        if (!std::isfinite(pC.x()) || !std::isfinite(pC.y()) || !std::isfinite(pC.z()) || pC.z() <= 0.0)
+        {
+          continue;
+        }
+
+        const Eigen::Vector3d pW = T_WC_from_body * pC;
+        if (!std::isfinite(pW.x()) || !std::isfinite(pW.y()) || !std::isfinite(pW.z()))
+        {
+          continue;
+        }
+
+        newValues.insert(lk, toGtsamPoint3_(pW));
+        ++landmarks_created;
+      }
 
       newFactors.add(StereoFactor(z, stereoNoise, xk, lk, Kst_, body_T_cam_));
       ++stereo_factors_added;
-
-      if (new_landmark && cfg_.init_landmarks_from_stereo)
-      {
-        const double disp = uL - uR;
-        if (disp > 1e-9)
-        {
-          const Eigen::Vector3d pC = triangulateStereoInLeftCam_(uL, uR, v, fx, fy, cx, cy, b);
-          const Eigen::Vector3d pW = T_WC_from_body * pC;
-          newValues.insert(lk, toGtsamPoint3_(pW));
-          ++landmarks_created;
-        }
-      }
 
       timestamps[lk] = t_now;
       landmark_last_seen_kf_[tid] = kf.kf_id;
