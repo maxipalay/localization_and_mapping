@@ -120,6 +120,7 @@ static double computePnPReprojRmsePx(const std::vector<cv::Point3f> &object_pts,
 
 static inline void selectDistributedTopupPoints(
     const cv::Size &full_sz,
+    const std::vector<cv::Point2f> &existing,
     const std::vector<cv::Point2f> &candidates,
     int grid_scale,
     size_t max_pts,
@@ -132,11 +133,15 @@ static inline void selectDistributedTopupPoints(
     const int scale = std::max(1, grid_scale);
     const int sw = (full_sz.width + scale - 1) / scale;
     const int sh = (full_sz.height + scale - 1) / scale;
+    const size_t num_cells = static_cast<size_t>(sw * sh);
 
-    cv::Mat occupied(sh, sw, CV_8U, cv::Scalar(0));
+    std::vector<int> occupancy(num_cells, 0);
+    std::vector<int> first_candidate_idx(num_cells, -1);
+    std::vector<size_t> candidate_cells;
+    candidate_cells.reserve(std::min(num_cells, candidates.size()));
     selected.reserve(std::min(max_pts, candidates.size()));
 
-    for (const auto &p : candidates)
+    for (const auto &p : existing)
     {
         const int x = static_cast<int>(p.x);
         const int y = static_cast<int>(p.y);
@@ -148,11 +153,47 @@ static inline void selectDistributedTopupPoints(
         if ((unsigned)sx >= (unsigned)sw || (unsigned)sy >= (unsigned)sh)
             continue;
 
-        if (occupied.at<uint8_t>(sy, sx) != 0)
+        const size_t cell_idx = static_cast<size_t>(sy * sw + sx);
+        ++occupancy[cell_idx];
+    }
+
+    for (size_t candidate_idx = 0; candidate_idx < candidates.size(); ++candidate_idx)
+    {
+        const auto &p = candidates[candidate_idx];
+        const int x = static_cast<int>(p.x);
+        const int y = static_cast<int>(p.y);
+        if ((unsigned)x >= (unsigned)full_sz.width || (unsigned)y >= (unsigned)full_sz.height)
             continue;
 
-        occupied.at<uint8_t>(sy, sx) = 1;
-        selected.push_back(p);
+        const int sx = x / scale;
+        const int sy = y / scale;
+        if ((unsigned)sx >= (unsigned)sw || (unsigned)sy >= (unsigned)sh)
+            continue;
+
+        const size_t cell_idx = static_cast<size_t>(sy * sw + sx);
+        if (first_candidate_idx[cell_idx] >= 0)
+            continue;
+
+        first_candidate_idx[cell_idx] = static_cast<int>(candidate_idx);
+        candidate_cells.push_back(cell_idx);
+    }
+
+    std::sort(
+        candidate_cells.begin(), candidate_cells.end(),
+        [&](size_t lhs, size_t rhs)
+        {
+            if (occupancy[lhs] != occupancy[rhs])
+                return occupancy[lhs] < occupancy[rhs];
+            return first_candidate_idx[lhs] < first_candidate_idx[rhs];
+        });
+
+    for (const size_t cell_idx : candidate_cells)
+    {
+        const int candidate_idx = first_candidate_idx[cell_idx];
+        if (candidate_idx < 0)
+            continue;
+
+        selected.push_back(candidates[static_cast<size_t>(candidate_idx)]);
         if (selected.size() >= max_pts)
             break;
     }
@@ -315,6 +356,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
                           static_cast<int>(std::ceil(params_.target_features * params_.topup_detect_factor))));
         selectDistributedTopupPoints(
             gray8_left.size(),
+            {},
             candidates,
             params_.topup_grid_scale,
             params_.target_features,
@@ -747,6 +789,7 @@ FrameResult VisualInertial::processStereo(const cv::Mat &gray8_left,
         feature_detector_.detect(d_gray8_left_, d_mask_, candidate_pts, detect_limit);
         selectDistributedTopupPoints(
             d_gray8_left_.size(),
+            tracks_buffer_.pl(),
             candidate_pts,
             params_.topup_grid_scale,
             static_cast<size_t>(topup_limit),
