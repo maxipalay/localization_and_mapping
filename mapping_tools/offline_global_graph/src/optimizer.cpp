@@ -53,6 +53,75 @@ gtsam::SharedNoiseModel robustPoseNoise(
     base_noise);
 }
 
+double clamp01(double x)
+{
+  return std::clamp(x, 0.0, 1.0);
+}
+
+double normalizedFloorScore(double value, double min_acceptable)
+{
+  if (min_acceptable <= 0.0) {
+    return 1.0;
+  }
+  return clamp01(value / min_acceptable);
+}
+
+double normalizedCeilingScore(double value, double max_acceptable)
+{
+  if (value < 0.0 || max_acceptable <= 0.0) {
+    return 1.0;
+  }
+  return clamp01(max_acceptable / std::max(value, 1e-9));
+}
+
+double computeBetweenIntervalQuality(
+  const KeyframeRecord::IntervalHealth &health,
+  const OptimizerConfig &config)
+{
+  if (health.num_frames == 0) {
+    return 1.0;
+  }
+
+  const double num_frames = static_cast<double>(health.num_frames);
+  const double pose_valid_fraction =
+    static_cast<double>(health.num_pose_valid_frames) / num_frames;
+  const double degraded_fraction =
+    static_cast<double>(health.num_degraded_frames) / num_frames;
+  const double lost_fraction =
+    static_cast<double>(health.num_lost_frames) / num_frames;
+
+  const double pose_valid_score =
+    normalizedFloorScore(pose_valid_fraction, config.between_health_min_pose_valid_fraction);
+  const double retention_score =
+    normalizedFloorScore(health.min_track_retention, config.between_health_min_track_retention);
+  const double pnp_score =
+    normalizedFloorScore(health.mean_pnp_inlier_ratio, config.between_health_min_pnp_inlier_ratio);
+  const double coverage_score =
+    normalizedFloorScore(health.min_track_coverage, config.between_health_min_track_coverage);
+  const double rmse_score =
+    normalizedCeilingScore(health.max_pnp_reproj_rmse_px, config.between_health_max_pnp_reproj_rmse_px);
+  const double state_score = clamp01(1.0 - std::max(degraded_fraction, lost_fraction));
+
+  return std::min({
+    pose_valid_score,
+    retention_score,
+    pnp_score,
+    coverage_score,
+    rmse_score,
+    state_score});
+}
+
+bool isLowQualityBetweenInterval(
+  const KeyframeRecord::IntervalHealth &health,
+  const OptimizerConfig &config,
+  double interval_quality)
+{
+  if (health.num_frames == 0) {
+    return false;
+  }
+  return interval_quality < config.between_health_skip_quality;
+}
+
 bool isDistantTagObservation(
   const TagObservation &observation,
   const OptimizerConfig &config)
@@ -141,11 +210,35 @@ OptimizationResult optimizeSession(const SessionData &session, const OptimizerCo
   for (size_t i = 1; i < session.keyframes.size(); ++i) {
     const auto &previous = session.keyframes[i - 1];
     const auto &current = session.keyframes[i];
+    gtsam::Pose3 between_measurement = previous.optimized_pose_wb.between(current.optimized_pose_wb);
+    if (current.has_vo_between_measurement) {
+      between_measurement = current.vo_between_prev_curr_body;
+    }
+
+    double sigma_scale = 1.0;
+    double interval_quality = 1.0;
+    bool low_quality_between = false;
+    if (config.use_interval_health_for_between) {
+      interval_quality = computeBetweenIntervalQuality(current.interval_health, config);
+      sigma_scale = 1.0 +
+        (1.0 - interval_quality) * std::max(0.0, config.between_health_max_sigma_scale - 1.0);
+      low_quality_between = isLowQualityBetweenInterval(
+        current.interval_health, config, interval_quality);
+      result.min_between_interval_quality = std::min(result.min_between_interval_quality, interval_quality);
+    }
+
+    if (low_quality_between) {
+      ++result.between_factor_low_quality_count;
+      sigma_scale = std::max(sigma_scale, std::max(1.0, config.between_health_max_sigma_scale));
+    }
+
     graph.add(gtsam::BetweenFactor<gtsam::Pose3>(
       xKey(previous.kf_id),
       xKey(current.kf_id),
-      previous.optimized_pose_wb.between(current.optimized_pose_wb),
-      poseNoise(config.between_translation_sigma_m, config.between_rotation_sigma_rad)));
+      between_measurement,
+      poseNoise(
+        config.between_translation_sigma_m * sigma_scale,
+        config.between_rotation_sigma_rad * sigma_scale)));
     ++result.between_factor_count;
   }
 

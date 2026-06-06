@@ -31,6 +31,14 @@ void printUsage()
   std::cerr
     << "Usage: offline_global_graph_cli --session-dir PATH [--output-dir PATH]\n"
     << "       [--map-anchor-tag-priors PATH --map-anchor-tag-id INTEGER]\n"
+    << "       [--use-interval-health-for-between true|false]\n"
+    << "       [--between-health-min-pose-valid-fraction FLOAT]\n"
+    << "       [--between-health-min-track-retention FLOAT]\n"
+    << "       [--between-health-min-pnp-inlier-ratio FLOAT]\n"
+    << "       [--between-health-min-track-coverage FLOAT]\n"
+    << "       [--between-health-max-pnp-reproj-rmse-px FLOAT]\n"
+    << "       [--between-health-max-sigma-scale FLOAT]\n"
+    << "       [--between-health-skip-quality FLOAT]\n"
     << "       [--only-tag-id INTEGER] [--exclude-tag-id INTEGER]\n";
 }
 
@@ -50,6 +58,26 @@ int parseInt(const std::string &value, const char *flag)
   } catch (const std::exception &) {
     throw std::runtime_error(std::string("failed to parse integer value for ") + flag);
   }
+}
+
+double parseDouble(const std::string &value, const char *flag)
+{
+  try {
+    return std::stod(value);
+  } catch (const std::exception &) {
+    throw std::runtime_error(std::string("failed to parse floating-point value for ") + flag);
+  }
+}
+
+bool parseBool(const std::string &value, const char *flag)
+{
+  if (value == "true" || value == "True" || value == "TRUE" || value == "1") {
+    return true;
+  }
+  if (value == "false" || value == "False" || value == "FALSE" || value == "0") {
+    return false;
+  }
+  throw std::runtime_error(std::string("failed to parse boolean value for ") + flag);
 }
 
 gtsam::Pose3 poseFromYamlNode(const YAML::Node &node)
@@ -149,6 +177,38 @@ int main(int argc, char **argv)
       } else if (arg == "--map-anchor-tag-id") {
         cli_config.map_anchor_tag_id = parseInt(
           requireValue(argc, argv, i, "--map-anchor-tag-id"), "--map-anchor-tag-id");
+      } else if (arg == "--use-interval-health-for-between") {
+        cli_config.optimizer_config.use_interval_health_for_between = parseBool(
+          requireValue(argc, argv, i, "--use-interval-health-for-between"),
+          "--use-interval-health-for-between");
+      } else if (arg == "--between-health-min-pose-valid-fraction") {
+        cli_config.optimizer_config.between_health_min_pose_valid_fraction = parseDouble(
+          requireValue(argc, argv, i, "--between-health-min-pose-valid-fraction"),
+          "--between-health-min-pose-valid-fraction");
+      } else if (arg == "--between-health-min-track-retention") {
+        cli_config.optimizer_config.between_health_min_track_retention = parseDouble(
+          requireValue(argc, argv, i, "--between-health-min-track-retention"),
+          "--between-health-min-track-retention");
+      } else if (arg == "--between-health-min-pnp-inlier-ratio") {
+        cli_config.optimizer_config.between_health_min_pnp_inlier_ratio = parseDouble(
+          requireValue(argc, argv, i, "--between-health-min-pnp-inlier-ratio"),
+          "--between-health-min-pnp-inlier-ratio");
+      } else if (arg == "--between-health-min-track-coverage") {
+        cli_config.optimizer_config.between_health_min_track_coverage = parseDouble(
+          requireValue(argc, argv, i, "--between-health-min-track-coverage"),
+          "--between-health-min-track-coverage");
+      } else if (arg == "--between-health-max-pnp-reproj-rmse-px") {
+        cli_config.optimizer_config.between_health_max_pnp_reproj_rmse_px = parseDouble(
+          requireValue(argc, argv, i, "--between-health-max-pnp-reproj-rmse-px"),
+          "--between-health-max-pnp-reproj-rmse-px");
+      } else if (arg == "--between-health-max-sigma-scale") {
+        cli_config.optimizer_config.between_health_max_sigma_scale = parseDouble(
+          requireValue(argc, argv, i, "--between-health-max-sigma-scale"),
+          "--between-health-max-sigma-scale");
+      } else if (arg == "--between-health-skip-quality") {
+        cli_config.optimizer_config.between_health_skip_quality = parseDouble(
+          requireValue(argc, argv, i, "--between-health-skip-quality"),
+          "--between-health-skip-quality");
       } else if (arg == "--only-tag-id") {
         cli_config.only_tag_ids.push_back(
           parseInt(requireValue(argc, argv, i, "--only-tag-id"), "--only-tag-id"));
@@ -194,6 +254,9 @@ int main(int argc, char **argv)
       << "  tags: " << result.optimized_tags.size() << "\n"
       << "  filtered_tag_observations_input: " << session.tag_observations.size() << "\n"
       << "  between_factors: " << result.between_factor_count << "\n"
+      << "  between_factors_low_quality: "
+      << result.between_factor_low_quality_count << "\n"
+      << "  min_between_interval_quality: " << result.min_between_interval_quality << "\n"
       << "  tag_observations_used: " << result.tag_observation_factor_count << "\n"
       << "  tag_observations_skipped_distance: " << result.tag_observation_skipped_distance_count << "\n"
       << "  tag_observations_skipped_hamming: " << result.tag_observation_skipped_hamming_count << "\n"

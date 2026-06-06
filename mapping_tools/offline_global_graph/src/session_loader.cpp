@@ -168,6 +168,24 @@ int64_t nodeInt64Or(const YAML::Node &node, const std::string &key, int64_t fall
   return value ? value.as<int64_t>() : fallback;
 }
 
+double nodeDoubleOr(const YAML::Node &node, const std::string &key, double fallback)
+{
+  const auto value = node[key];
+  return value ? value.as<double>() : fallback;
+}
+
+uint32_t nodeUint32Or(const YAML::Node &node, const std::string &key, uint32_t fallback)
+{
+  const auto value = node[key];
+  return value ? value.as<uint32_t>() : fallback;
+}
+
+int32_t nodeInt32Or(const YAML::Node &node, const std::string &key, int32_t fallback)
+{
+  const auto value = node[key];
+  return value ? value.as<int32_t>() : fallback;
+}
+
 bool nodeBoolOr(const YAML::Node &node, const std::string &key, bool fallback)
 {
   const auto value = node[key];
@@ -216,6 +234,24 @@ gtsam::Pose3 poseFromYamlNode(const YAML::Node &node)
     quaternion[1].as<double>(),
     quaternion[2].as<double>(),
     quaternion[3].as<double>());
+}
+
+KeyframeRecord::IntervalHealth intervalHealthFromYamlNode(const YAML::Node &node)
+{
+  KeyframeRecord::IntervalHealth health;
+  health.num_frames = nodeUint32Or(node, "num_frames", 0);
+  health.num_pose_valid_frames = nodeUint32Or(node, "num_pose_valid_frames", 0);
+  health.num_degraded_frames = nodeUint32Or(node, "num_degraded_frames", 0);
+  health.num_lost_frames = nodeUint32Or(node, "num_lost_frames", 0);
+  health.min_tracks = nodeInt32Or(node, "min_tracks", 0);
+  health.mean_tracks = nodeDoubleOr(node, "mean_tracks", 0.0);
+  health.min_track_retention = nodeDoubleOr(node, "min_track_retention", 0.0);
+  health.mean_track_retention = nodeDoubleOr(node, "mean_track_retention", 0.0);
+  health.mean_pnp_inlier_ratio = nodeDoubleOr(node, "mean_pnp_inlier_ratio", 0.0);
+  health.max_pnp_reproj_rmse_px = nodeDoubleOr(node, "max_pnp_reproj_rmse_px", 0.0);
+  health.min_track_coverage = nodeDoubleOr(node, "min_track_coverage", 0.0);
+  health.mean_track_coverage = nodeDoubleOr(node, "mean_track_coverage", 0.0);
+  return health;
 }
 
 void loadManifest(SessionData &session)
@@ -271,6 +307,18 @@ void loadKeyframeMetadata(SessionData &session)
     const YAML::Node root = YAML::LoadFile(keyframe.keyframe_meta_path.string());
     if (const YAML::Node optimized_pose_wb = root["optimized_pose_wb"]) {
       keyframe.optimized_pose_wb = poseFromYamlNode(optimized_pose_wb);
+    }
+    keyframe.has_vo_between_measurement = nodeBoolOr(root, "has_vo_between", false);
+    if (keyframe.has_vo_between_measurement) {
+      const YAML::Node between_pose = root["between_pose_prev_curr_body"];
+      if (between_pose) {
+        keyframe.vo_between_prev_curr_body = poseFromYamlNode(between_pose);
+      } else {
+        keyframe.has_vo_between_measurement = false;
+      }
+    }
+    if (const YAML::Node interval_health = root["interval_health"]) {
+      keyframe.interval_health = intervalHealthFromYamlNode(interval_health);
     }
   }
 }
