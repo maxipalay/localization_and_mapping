@@ -54,8 +54,8 @@ visual_inertial:
     # Keyframe policy
     kf_min_dt_s: 0.2
     kf_max_dt_s: 1.00
-    kf_min_trans_m: 0.2
-    kf_min_rot_deg: 20.0
+    kf_min_trans_m: 0.15
+    kf_min_rot_deg: 15.0
     kf_min_tracks: 120
     kf_min_pnp_tracks: 100
     kf_min_shared_tracks: 90
