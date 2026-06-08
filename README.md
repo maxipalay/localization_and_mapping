@@ -8,19 +8,7 @@ This repo contains a full visual-inertial mapping stack. It covers the online es
 
 This was created as a means to immerse myself more in perception and SLAM strategies and components. By doing this I learned so many things that aren't in the books. It's the small tricks, heuristics and architectural decisions that make a system. I designed this thinking about 2 things: I wanted it to be conceptually clear what the components in the SLAM system are, even though I might pay a little higher price on overhead by dissecting them, and I always thought about the moment I would deploy this on a real robot with limited resources. 
 
-It's scrappy, a little messy and far from perfect. But it's a starting point. There's so many improvements I already have in mind. Just to name a few:
-- Offline global optimization isnt really doing much right now besides closing the loop using apriltag detections and shifting the map with an anchored tag. I could leverage heavier use of features and seed poses/create between factors from the online session
-- Revisit keeping vision streams/processing within GPU to reduce dense copies and waits
-- Improve spatial distribution of feature tracking module. Right now to make it fast we just grid up and count the least full regions for top up. This seems to be great for speed, but should check if it's the best option. Features still cluster in certain image regions depending on motion
-- Upgrade tag-based loop closure to feature-based. This is kind of a big one
-- Upgrade the frame to frame visual only (fast) estimates to a filtered estimate that uses both visual and IMU information
-- Cleaner launch system
-- Zero-velocity updates (ZUPT). Right now the approach is to just emit a keframe at a reduced rate, even if there is no motion. Check strategy
-- Initialization of IMU/accept tilted starting angles. Right now we just initialize at identity regardless of starting attitude
-- Real time/live generation of ESDF/mesh
-- Cleaner logging using levels, remove standard output
-- Right now the system expects a static environment. Be able to tolerate dynamic objects
-
+It's scrappy, a little messy and far from perfect. But it's a starting point. There's so many improvements I already have in mind. Check out the section on improvements at the end of the readme.
 
 I hope I find time to keep improving this.
 
@@ -328,6 +316,21 @@ ros2 run apriltag_ros apriltag_node --ros-args \
   -p image_transport:=raw \
   --params-file your/path/to/tags_36h11.yaml
 ```
+
+# Improvements
+
+Probably a list too long ofr anyone to read, but just to name a few:
+- Offline global optimization isnt really doing much right now besides closing the loop using apriltag detections and shifting the map with an anchored tag. I could leverage heavier use of features and seed poses/create between factors from the online session
+- Revisit keeping vision streams/processing within GPU to reduce dense copies and waits
+- Improve spatial distribution of feature tracking module. Right now to make it fast we just grid up and count the least full regions for top up. This seems to be great for speed, but should check if it's the best option. Features still cluster in certain image regions depending on motion
+- Upgrade tag-based loop closure to feature-based. This is kind of a big one
+- Upgrade the frame to frame visual only (fast) estimates to a filtered estimate that uses both visual and IMU information
+- Cleaner launch system
+- Zero-velocity updates (ZUPT). Right now the approach is to just emit a keframe at a reduced rate, even if there is no motion. Check strategy
+- Initialization of IMU/accept tilted starting angles. Right now we just initialize at identity regardless of starting attitude
+- Real time/live generation of ESDF/mesh
+- Cleaner logging using levels, remove standard output
+- Right now the system expects a static environment. Be able to tolerate dynamic objects
 
 # Acknowledgements
 
