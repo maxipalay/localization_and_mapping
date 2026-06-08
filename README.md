@@ -129,6 +129,13 @@ rviz2 -d visual_inertial_odometry/visual_inertial_bringup/config/vio_config.rviz
 
 #### Mapping an environment
 
+<p align="center">
+  <img src="./docs/mapping_session.gif" alt="" width="1100" style="border-radius: 12px;" />
+</p>
+<p align="center">
+  You can see the estimated VIO path as I map and the 3D landmarks that the optimizer is using.
+</p>
+
 ##### Mapping and optimization session
 
 1. Creating a map.
@@ -294,6 +301,13 @@ ros2 run ply_pointcloud_viz ply_pointcloud_viz_node \
 ---
 
 #### Localizing in mapped environment
+
+<p align="center">
+  <img src="./docs/localization_session.gif" alt="" width="1100" style="border-radius: 12px;" />
+</p>
+<p align="center">
+  Localization visualization.
+</p>
 
 This just runs odometry, the smoother/local window optimization, and a relocalization node which loads the optimized tag poses. The `map` is only a set of tag poses, because we don't use features in the space to localize ourselves. This means we could drift really badly if we don't see an AprilTag for while. It's just the nature of how this system works right now.
 
