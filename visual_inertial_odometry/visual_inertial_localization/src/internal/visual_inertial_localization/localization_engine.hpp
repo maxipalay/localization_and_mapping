@@ -51,6 +51,7 @@ public:
     std::optional<StableCorrectionEstimate> estimateStableCorrection(const rclcpp::Time &stamp) const;
     std::optional<StableCorrectionEstimate> estimateRelocalizationCorrection(const rclcpp::Time &stamp) const;
     size_t bufferedObservationCount() const noexcept;
+    void clearTemporalState() const noexcept;
 
     const LocalizationConfig &config() const noexcept;
     const std::unordered_map<int, Eigen::Isometry3d> &mappedTags() const noexcept;

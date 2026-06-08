@@ -121,4 +121,43 @@ TEST(LocalizationControllerTest, ProcessKeyframeRelocalizesWhenStableCorrectionD
         1e-9);
 }
 
+TEST(LocalizationControllerTest, RelocalizationClearsStaleTemporalEvidence)
+{
+    const viloc_test::TempTagMapFile tag_map(viloc_test::singleTagMapYaml());
+    LocalizationModule module(makeBaseConfig(tag_map.path().string()));
+    ASSERT_TRUE(module.loadTagMap().ok);
+
+    auto tf_buffer = viloc_test::makeTfBuffer();
+    viloc_test::setStaticTransform(
+        tf_buffer, "body", "tag36h11:1", Eigen::Vector3d(0.0, 0.0, 1.0));
+    viloc_test::setStaticTransform(
+        tf_buffer, "odom", "body", Eigen::Vector3d::Zero());
+
+    module.ingestDetections(viloc_test::makeDetectionArray(0.0, 50.0), "body", "odom", tf_buffer);
+    module.ingestDetections(viloc_test::makeDetectionArray(0.1, 50.0), "body", "odom", tf_buffer);
+    module.ingestDetections(viloc_test::makeDetectionArray(0.2, 50.0), "body", "odom", tf_buffer);
+    ASSERT_EQ(
+        module.processKeyframe(viloc_test::stampNs(0.2), Eigen::Isometry3d::Identity()).action,
+        LocalizationAction::Bootstrap);
+
+    module.updateMapOdomEstimate(Eigen::Isometry3d::Identity());
+
+    module.ingestDetections(viloc_test::makeDetectionArray(0.3, 50.0), "body", "odom", tf_buffer);
+    module.ingestDetections(viloc_test::makeDetectionArray(0.4, 50.0), "body", "odom", tf_buffer);
+    module.ingestDetections(viloc_test::makeDetectionArray(0.5, 50.0), "body", "odom", tf_buffer);
+
+    ASSERT_EQ(
+        module.processKeyframe(viloc_test::stampNs(0.5), Eigen::Isometry3d::Identity()).action,
+        LocalizationAction::Relocalize);
+
+    const auto followup = module.processKeyframe(
+        viloc_test::stampNs(0.6),
+        Eigen::Isometry3d::Identity());
+
+    EXPECT_EQ(followup.state, LocalizationState::Localized);
+    EXPECT_EQ(followup.action, LocalizationAction::None);
+    EXPECT_FALSE(followup.relocalization.has_value());
+    EXPECT_TRUE(followup.optimizer_inputs.absolute_pose_priors.empty());
+}
+
 } // namespace

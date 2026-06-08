@@ -108,6 +108,8 @@ LocalizationDecision LocalizationController::processKeyframe(
                 decision.optimizer_inputs.absolute_pose_priors.clear();
                 decision.optimizer_inputs.absolute_pose_priors.push_back(
                     makePrior_(*decision.optimizer_inputs.T_WB_anchor_override, false));
+                // A hard relocalization should not keep reusing the evidence that triggered it.
+                engine_.clearTemporalState();
                 used_stable_correction = true;
             }
         }

@@ -472,6 +472,19 @@ size_t LocalizationEngine::bufferedObservationCount() const noexcept
     return tag_observation_buffer_.size();
 }
 
+void LocalizationEngine::clearTemporalState() const noexcept
+{
+    {
+        std::lock_guard<std::mutex> lk(tag_obs_mtx_);
+        tag_observation_buffer_.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lk(stable_correction_mtx_);
+        stable_correction_buffer_.clear();
+    }
+    last_tag_message_stamp_ns_.store(0, std::memory_order_relaxed);
+}
+
 const LocalizationConfig &LocalizationEngine::config() const noexcept
 {
     return config_;
