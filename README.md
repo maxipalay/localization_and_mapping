@@ -4,7 +4,7 @@
   <img src="./docs/localization.gif" alt="main gif demo" width="1100" style="border-radius: 12px;" />
 </p>
 
-This repo contains a full visual-inertial mapping stack. It covers the online estimator, the sensor-side runtime code needed to feed it clean data, and the offline tools used to log sessions, refine trajectories, build maps and visualization tools.
+This repo contains a full visual-inertial mapping and localization stack. It covers the online estimator, the sensor-side runtime code needed to feed it clean data, and the offline tools used to log sessions, refine trajectories, build maps and visualization tools. Localization is a generous term for what the system currently does, but I hope I can develop it more.
 
 This was created as a means to immerse myself more in perception and SLAM strategies and components. By doing this I learned so many things that aren't in the books. It's the small tricks, heuristics and architectural decisions that make a system. I designed this thinking about 2 things: I wanted it to be conceptually clear what the components in the SLAM system are, even though I might pay a little higher price on overhead by dissecting them, and I always thought about the moment I would deploy this on a real robot with limited resources. 
 
